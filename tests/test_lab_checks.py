@@ -259,6 +259,171 @@ def test_check_handler_hints_hide_ids_and_lesson_code(
     for code_hint in (".strip()", ".casefold()", "casefold", "quantity == 0", "raise ValueError("):
         assert code_hint not in output
 
+
+def stub_check_cellar(varietal: str) -> dict:
+    """The lab's TODO stub, before the learner writes anything."""
+    raise NotImplementedError("YOUR TURN: write check_cellar (Part 4). This is not one of the expected failures.")
+
+
+def test_check_handler_reports_an_unfinished_stub_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """A stub gets one clear hint about the TODO, not five confusing case failures."""
+    assert lab_checks.check_handler(stub_check_cellar) is False
+    output = capsys.readouterr().out
+    assert "NotImplementedError" in output
+    assert "YOUR TURN" in output
+    assert "[fail]" not in output
+
+
+# ---------------------------------------------------------------------------
+# check_drink_soon
+# ---------------------------------------------------------------------------
+
+
+def _drink_soon_summary(bottle: dict) -> dict:
+    """Keep the fields the stretch tool returns."""
+    return {name: bottle[name] for name in ("varietal", "vineyard", "vintage", "quantity", "drink_by")}
+
+
+def reference_drink_soon(year: int, within_years: int = 1) -> dict:
+    """The reference stretch handler from solution.ipynb."""
+    deadline = year + within_years
+    bottles = [
+        _drink_soon_summary(bottle)
+        for bottle in sorted(CELLAR, key=lambda bottle: bottle["drink_by"])
+        if bottle["quantity"] > 0 and bottle["drink_by"] <= deadline
+    ]
+    return {"year": year, "within_years": within_years, "bottles": bottles}
+
+
+def stub_drink_soon(year: int, within_years: int = 1) -> dict:
+    """The lab's TODO stub."""
+    raise NotImplementedError("YOUR TURN: write bottles_to_drink_soon (Stretch). This is not one of the expected failures.")
+
+
+def skips_past_due_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Leaves out bottles already past their drink-by year."""
+    result = reference_drink_soon(year, within_years)
+    result["bottles"] = [bottle for bottle in result["bottles"] if bottle["drink_by"] >= year]
+    return result
+
+
+def keeps_empty_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Forgets the quantity filter, so the finished Riesling shows up by 2030."""
+    deadline = year + within_years
+    bottles = [
+        _drink_soon_summary(bottle)
+        for bottle in sorted(CELLAR, key=lambda bottle: bottle["drink_by"])
+        if bottle["drink_by"] <= deadline
+    ]
+    return {"year": year, "within_years": within_years, "bottles": bottles}
+
+
+def strict_deadline_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Uses < instead of <=, so bottles due in the deadline year are missed."""
+    result = reference_drink_soon(year, within_years)
+    result["bottles"] = [bottle for bottle in result["bottles"] if bottle["drink_by"] < year + within_years]
+    return result
+
+
+def unsorted_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Finds the right bottles but keeps cellar order."""
+    deadline = year + within_years
+    bottles = [
+        _drink_soon_summary(bottle)
+        for bottle in CELLAR
+        if bottle["quantity"] > 0 and bottle["drink_by"] <= deadline
+    ]
+    return {"year": year, "within_years": within_years, "bottles": bottles}
+
+
+def clock_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Ignores the year argument and uses this lab's current year instead."""
+    return reference_drink_soon(2026, within_years)
+
+
+def ignores_window_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Always looks one year ahead."""
+    return reference_drink_soon(year, 1)
+
+
+def no_varietal_drink_soon(year: int, within_years: int = 1) -> dict:
+    """Leaves out the varietal, which the sommelier needs to name the wine."""
+    result = reference_drink_soon(year, within_years)
+    for bottle in result["bottles"]:
+        del bottle["varietal"]
+    return result
+
+
+def bare_list_drink_soon(year: int, within_years: int = 1) -> list[dict]:
+    """Returns the bottles without the surrounding dict."""
+    return reference_drink_soon(year, within_years)["bottles"]
+
+
+DRINK_SOON_MISTAKES: list[Callable[..., Any]] = [
+    skips_past_due_drink_soon,
+    keeps_empty_drink_soon,
+    strict_deadline_drink_soon,
+    unsorted_drink_soon,
+    clock_drink_soon,
+    ignores_window_drink_soon,
+    no_varietal_drink_soon,
+    bare_list_drink_soon,
+]
+
+
+def test_check_drink_soon_passes_the_reference(capsys: pytest.CaptureFixture[str]) -> None:
+    """The reference stretch handler passes every case."""
+    assert lab_checks.check_drink_soon(reference_drink_soon) is True
+    output = capsys.readouterr().out
+    assert "PASS:" in output
+    assert "NOT YET:" not in output
+
+
+def test_check_drink_soon_uses_the_cases_from_the_brief(capsys: pytest.CaptureFixture[str]) -> None:
+    """2026 with within_years 1 and 0 are graded, plus a later year that a clock reading would miss."""
+    lab_checks.check_drink_soon(reference_drink_soon)
+    output = capsys.readouterr().out
+    assert "year=2026, within_years=1" in output
+    assert "year=2026, within_years=0" in output
+    assert "year=2030, within_years=0" in output
+
+
+@pytest.mark.parametrize("handler", DRINK_SOON_MISTAKES, ids=lambda handler: handler.__name__)
+def test_check_drink_soon_catches_each_mistake(handler: Callable[..., Any], capsys: pytest.CaptureFixture[str]) -> None:
+    """Each common mistake is NOT YET, and the hints name bottles the way learners see them."""
+    assert lab_checks.check_drink_soon(handler) is False
+    output = capsys.readouterr().out
+    for bottle in CELLAR:
+        assert bottle["id"] not in output
+
+
+def test_check_drink_soon_explains_past_due_bottles(capsys: pytest.CaptureFixture[str]) -> None:
+    """A bottle past its drink-by year is the most urgent, and the hint says so."""
+    lab_checks.check_drink_soon(skips_past_due_drink_soon)
+    output = capsys.readouterr().out
+    assert "Missing: 2015 Old Mill Road Vineyards (drink by 2025)" in output
+    assert "already past" in output
+
+
+def test_check_drink_soon_explains_quantity_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    """The finished Riesling is reported as an extra bottle with quantity 0."""
+    lab_checks.check_drink_soon(keeps_empty_drink_soon)
+    assert "2022 Winter Heron Cellars (drink by 2030) has quantity 0" in capsys.readouterr().out
+
+
+def test_check_drink_soon_explains_sort_order(capsys: pytest.CaptureFixture[str]) -> None:
+    """Right bottles in the wrong order get an ordering hint."""
+    lab_checks.check_drink_soon(unsorted_drink_soon)
+    assert "soonest first" in capsys.readouterr().out
+
+
+def test_check_drink_soon_reports_an_unfinished_stub_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """A stub gets one clear hint about the TODO."""
+    assert lab_checks.check_drink_soon(stub_drink_soon) is False
+    output = capsys.readouterr().out
+    assert "NotImplementedError" in output
+    assert "[fail]" not in output
+
 # ---------------------------------------------------------------------------
 # Message history builders. Assistant turns use SimpleNamespace blocks to
 # stand in for SDK objects; user turns use plain dicts, as learners write them.
@@ -585,3 +750,199 @@ def test_check_setup_names_wrong_kernel(
     assert lab_checks.check_setup(project_root=fake_project) is False
     assert "kernel" in capsys.readouterr().out
 
+
+
+# ---------------------------------------------------------------------------
+# The dispatch probe and the stretch gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def fresh_session() -> None:
+    """Forget conversation checks from other tests, as a kernel restart would."""
+    lab_checks.SESSION_PASSES.clear()
+
+
+def _tool_error(tool_use: Any, message: str) -> dict:
+    """The tool_error helper from the notebooks."""
+    return {"type": "tool_result", "tool_use_id": tool_use.id, "content": message, "is_error": True}
+
+
+def reference_dispatch(tool_use: Any) -> dict:
+    """The fixed Part 4 dispatch from solution.ipynb."""
+    if tool_use.name != "check_cellar":
+        return _tool_error(tool_use, f"Unknown tool: {tool_use.name}")
+    try:
+        result = reference_check_cellar(tool_use.input["varietal"])
+    except ValueError as error:
+        return _tool_error(tool_use, str(error))
+    return {"type": "tool_result", "tool_use_id": tool_use.id, "content": json.dumps(result)}
+
+
+def starter_dispatch(tool_use: Any) -> dict:
+    """The Part 3 starter dispatch, which lets the KeyError escape."""
+    result = buggy_check_cellar(tool_use.input["varietal"])
+    return {"type": "tool_result", "tool_use_id": tool_use.id, "content": json.dumps(result)}
+
+
+def stub_dispatch(tool_use: Any) -> dict:
+    """The lab's TODO stub."""
+    raise NotImplementedError("YOUR TURN: write dispatch_tool (Part 4). This is not one of the expected failures.")
+
+
+def no_flag_dispatch(tool_use: Any) -> dict:
+    """Catches the error but forgets is_error."""
+    result = reference_dispatch(tool_use)
+    result.pop("is_error", None)
+    return result
+
+
+@pytest.mark.parametrize("dispatch", [starter_dispatch, stub_dispatch, no_flag_dispatch], ids=lambda f: f.__name__)
+def test_check_dispatch_catches_mistakes(dispatch: Callable[[Any], dict], capsys: pytest.CaptureFixture[str]) -> None:
+    """A dispatch that raises, is unfinished, or drops is_error is NOT YET."""
+    assert lab_checks.check_dispatch(dispatch) is False
+    assert "NOT YET:" in capsys.readouterr().out
+
+
+def test_check_dispatch_passes_the_reference(capsys: pytest.CaptureFixture[str]) -> None:
+    """The fixed dispatch returns an is_error tool_result for Merlot."""
+    assert lab_checks.check_dispatch(reference_dispatch) is True
+    assert "PASS:" in capsys.readouterr().out
+
+
+def test_check_dispatch_gives_the_tool_result_shape(capsys: pytest.CaptureFixture[str]) -> None:
+    """Plumbing hints give exact syntax."""
+    lab_checks.check_dispatch(starter_dispatch)
+    output = capsys.readouterr().out
+    assert "KeyError" in output
+    assert "'is_error': True" in output
+
+
+def test_stretch_gate_passes_finished_part4(capsys: pytest.CaptureFixture[str]) -> None:
+    """A finished Part 4 opens the stretch without raising."""
+    lab_checks.check_stretch_ready(reference_check_cellar, reference_dispatch)
+    assert "PASS:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("handler", "dispatch", "names"),
+    [
+        (buggy_check_cellar, reference_dispatch, ["check_cellar"]),
+        (stub_check_cellar, reference_dispatch, ["check_cellar"]),
+        (reference_check_cellar, starter_dispatch, ["dispatch_tool"]),
+        (reference_check_cellar, stub_dispatch, ["dispatch_tool"]),
+        (buggy_check_cellar, starter_dispatch, ["check_cellar", "dispatch_tool"]),
+    ],
+    ids=["buggy-handler", "stub-handler", "starter-dispatch", "stub-dispatch", "both"],
+)
+def test_stretch_gate_stops_unfinished_part4(
+    handler: Callable[[str], Any], dispatch: Callable[[Any], dict], names: list[str]
+) -> None:
+    """An unfinished Part 4 stops the stretch and names what is missing."""
+    with pytest.raises(lab_checks.PartNotFinishedError) as raised:
+        lab_checks.check_stretch_ready(handler, dispatch)
+    message = str(raised.value)
+    assert message.startswith("Finish Part 4 first: ")
+    for name in names:
+        assert name in message
+    for other in {"check_cellar", "dispatch_tool"} - set(names):
+        assert other not in message
+
+
+def test_stretch_gate_lists_failing_handler_cases() -> None:
+    """The gate names the check_handler cases that still fail."""
+    with pytest.raises(lab_checks.PartNotFinishedError) as raised:
+        lab_checks.check_stretch_ready(buggy_check_cellar, reference_dispatch)
+    assert "'Riesling' returns no bottles" in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+
+
+def finished_namespace() -> dict[str, Any]:
+    """A notebook namespace where every function is finished."""
+    return {
+        "check_cellar": reference_check_cellar,
+        "dispatch_tool": reference_dispatch,
+        "bottles_to_drink_soon": reference_drink_soon,
+        "SOMMELIER_PROMPT": "You are a sommelier.",
+    }
+
+
+def drink_soon_history() -> list[dict]:
+    """A finished stretch conversation that called bottles_to_drink_soon."""
+    result_json = json.dumps(reference_drink_soon(2026))
+    return [
+        {"role": "user", "content": "It is 2026. What should I open?"},
+        {
+            "role": "assistant",
+            "content": [sdk_block(type="tool_use", id="toolu_5", name="bottles_to_drink_soon", input={"year": 2026})],
+        },
+        {"role": "user", "content": [tool_result_block("toolu_5", result_json)]},
+        {"role": "assistant", "content": [sdk_block(type="text", text="Open the 2015 Old Mill Road Vineyards first.")]},
+    ]
+
+
+def pass_every_conversation_check() -> None:
+    """Run each conversation checkpoint once on a passing input, as a learner would."""
+    lab_checks.check_part1(SimpleNamespace(stop_reason="end_turn", content=[sdk_block(type="text", text="Thin skin.")]))
+    lab_checks.check_part2(SimpleNamespace(stop_reason="tool_use", content=[tool_use_block("toolu_1", "Pinot Noir")]))
+    lab_checks.check_part3(valid_history())
+    lab_checks.check_part4(merlot_history())
+    lab_checks.check_part3(drink_soon_history())
+
+
+def test_summary_passes_a_finished_lab(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Every part done, stretch included, is PASS everywhere."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    pass_every_conversation_check()
+    capsys.readouterr()
+    assert lab_checks.summary(finished_namespace()) is True
+    output = capsys.readouterr().out
+    assert "NOT YET" not in output
+    assert output.rstrip().splitlines()[-1].startswith("PASS:")
+
+
+def test_summary_reports_conversations_not_run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Finished functions are not enough: the conversation checks must have passed this session."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    assert lab_checks.summary(finished_namespace()) is False
+    output = capsys.readouterr().out
+    assert "NOT YET  Part 3" in output
+    assert output.rstrip().splitlines()[-1].startswith("NOT YET:")
+
+
+def test_summary_reruns_the_offline_checks(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A handler broken after its checkpoint passed shows up as NOT YET."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    pass_every_conversation_check()
+    namespace = finished_namespace() | {"check_cellar": buggy_check_cellar, "dispatch_tool": stub_dispatch}
+    capsys.readouterr()
+    assert lab_checks.summary(namespace) is False
+    output = capsys.readouterr().out
+    assert "NOT YET  Part 4: check_cellar" in output
+    assert "NOT YET  Part 4: dispatch_tool" in output
+    assert "[fail]" not in output  # one line per part, not the full check output
+
+
+def test_summary_treats_the_stretch_as_optional(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """An unfinished stretch is reported, but the required parts still pass."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    pass_every_conversation_check()
+    lab_checks.SESSION_PASSES.discard("stretch-conversation")
+    namespace = finished_namespace() | {"bottles_to_drink_soon": stub_drink_soon}
+    del namespace["SOMMELIER_PROMPT"]
+    capsys.readouterr()
+    assert lab_checks.summary(namespace) is True
+    output = capsys.readouterr().out
+    assert "NOT YET  Stretch (optional)" in output
+    assert "stretch" in output.rstrip().splitlines()[-1].lower()
+
+
+def test_summary_handles_undefined_functions(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A function whose cell never ran is NOT YET, not a NameError."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    assert lab_checks.summary({}) is False
+    assert "is not defined" in capsys.readouterr().out

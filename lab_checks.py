@@ -11,10 +11,13 @@ Message content can be plain dicts (the way you write user turns) or SDK
 objects (the way ``response.content`` comes back). The checks accept both.
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,10 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parent
 CELLAR_PATH: Path = PROJECT_ROOT / "cellar.json"
 PLACEHOLDER_KEY: str = "your-key-here"
 TOOL_NAME: str = "check_cellar"
+
+# Conversation checks that have passed since the kernel started. They need the
+# live API, so summary() reports them from here instead of re-running them.
+SESSION_PASSES: set[str] = set()
 
 
 def load_cellar(path: Path = CELLAR_PATH) -> list[dict]:
@@ -233,6 +240,7 @@ def check_part1(response: Any) -> bool:
             "response.content has no text block. Select blocks by their type "
             "(block.type == 'text'), never by position: a thinking block can come first."
         )
+    SESSION_PASSES.add("part1")
     return _passed("The response ended with 'end_turn' and contains a text block.")
 
 
@@ -278,6 +286,7 @@ def check_part2(response: Any) -> bool:
             f"The tool_use input has no 'varietal' string (got {tool_input!r}). Check "
             "input_schema: one property named 'varietal' of type 'string', listed in 'required'."
         )
+    SESSION_PASSES.add("part2")
     return _passed(
         f"Claude asked to run {TOOL_NAME} with varietal={varietal!r} "
         f"(tool_use id {_field(call, 'id')}). Claude does not run the tool. Your code does."
@@ -466,6 +475,15 @@ def check_part3(messages: Any) -> bool:
             f"({', '.join(returned)}). Run the conversation again. If it keeps happening, "
             "check that the tool_result content holds the full result."
         )
+    SESSION_PASSES.add("part3")
+    called = {
+        _field(block, "name")
+        for message in messages
+        if _field(message, "role") == "assistant"
+        for block in _blocks_of_type(_field(message, "content"), "tool_use")
+    }
+    if "bottles_to_drink_soon" in called:
+        SESSION_PASSES.add("stretch-conversation")
     return _passed(
         f"{_count_tool_uses(messages)} tool call(s), each answered by a matching tool_result, "
         f"and Claude's final answer names {named[0]}, which came from your tool."
@@ -500,6 +518,7 @@ def check_part4(messages: Any) -> bool:
             "No tool_result has is_error set. When dispatch catches the ValueError, return "
             "{'type': 'tool_result', 'tool_use_id': ..., 'content': str(error), 'is_error': True}."
         )
+    SESSION_PASSES.add("part4")
     return _passed(
         "Claude received the error as a tool_result with is_error set and still answered. "
         "The program did not crash."
@@ -511,22 +530,22 @@ def check_part4(messages: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _bottle_keys(result: Any) -> tuple[set[tuple[str, int]] | None, str | None]:
+def _bottle_keys(
+    result: Any, shape: str = "{'varietal': ..., 'bottles': [...]}"
+) -> tuple[set[tuple[str, int]] | None, str | None]:
     """Pull ``(vineyard, vintage)`` pairs out of a handler result.
 
     A bare list of bottles is still read, so the graders can report what is
     in it, but it also comes back with a hint about the expected shape.
 
     :param result: What the handler returned.
+    :param shape: The expected result, as shown in the bare-list hint.
     :returns: The set of pairs (or ``None`` if unreadable) and a shape hint (or ``None``).
     """
     shape_hint: str | None = None
     if isinstance(result, list):
         bottles = result
-        shape_hint = (
-            "returned a bare list. Return a dict like {'varietal': ..., 'bottles': [...]} "
-            "so Claude gets a labeled result."
-        )
+        shape_hint = f"returned a bare list. Return a dict like {shape} so Claude gets a labeled result."
     elif isinstance(result, dict) and isinstance(result.get("bottles"), list):
         bottles = result["bottles"]
     else:
@@ -540,17 +559,39 @@ def _bottle_keys(result: Any) -> tuple[set[tuple[str, int]] | None, str | None]:
     return keys, shape_hint
 
 
-def _run_handler(handler: Callable[[str], Any], varietal: str) -> tuple[Any, BaseException | None]:
+def _run_handler(handler: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[Any, BaseException | None]:
     """Call the handler and capture either its result or its exception.
 
-    :param handler: The learner's ``check_cellar`` function.
-    :param varietal: The input to try.
+    :param handler: The learner's function, such as ``check_cellar``.
+    :param args: Positional arguments to pass.
+    :param kwargs: Keyword arguments to pass.
     :returns: ``(result, None)`` on success, or ``(None, error)`` if it raised.
     """
     try:
-        return handler(varietal), None
+        return handler(*args, **kwargs), None
     except Exception as error:  # any failure is a failed case, never a crash of the check
         return None, error
+
+
+def _stub_problem(handler: Callable[..., Any], *args: Any, **kwargs: Any) -> str | None:
+    """Spot a TODO stub that has not been written yet.
+
+    A stub raises ``NotImplementedError`` on every input, so one clear hint
+    helps more than a failure for every case.
+
+    :param handler: The learner's function.
+    :param args: Positional arguments for one trial call.
+    :param kwargs: Keyword arguments for one trial call.
+    :returns: A hint if the function is still a stub, otherwise ``None``.
+    """
+    _, error = _run_handler(handler, *args, **kwargs)
+    if not isinstance(error, NotImplementedError):
+        return None
+    name = getattr(handler, "__name__", "This function")
+    return (
+        f"{name} still raises NotImplementedError ({error}). Write the function in this "
+        "cell, delete the raise NotImplementedError line, and run the cell again."
+    )
 
 
 def _label(bottle_key: tuple[str, int]) -> str:
@@ -563,15 +604,17 @@ def _label(bottle_key: tuple[str, int]) -> str:
     return f"{vintage} {vineyard}"
 
 
-def check_handler(handler: Callable[[str], Any]) -> bool:
-    """Run ``check_cellar`` against fixed inputs, offline, and grade each case.
+def _grade_handler(handler: Callable[[str], Any]) -> tuple[str | None, list[tuple[str, str | None]]]:
+    """Grade ``check_cellar`` against the fixed offline cases, without printing.
 
-    No API calls are made, so the result is the same every time. Hints say
-    what is wrong and why. The notebook's hint cells show code if you need it.
-
-    :param handler: Your ``check_cellar(varietal)`` function.
-    :returns: ``True`` if every case passes.
+    :param handler: The learner's ``check_cellar(varietal)`` function.
+    :returns: A hint if the handler is still a stub (with no cases), otherwise
+        ``None`` and one ``(description, hint)`` pair per case.
     """
+    stub = _stub_problem(handler, "Pinot Noir")
+    if stub is not None:
+        return stub, []
+
     cellar = load_cellar()
     varietal_of = {(bottle["vineyard"], bottle["vintage"]): bottle["varietal"] for bottle in cellar}
     by_id = {bottle["id"]: (bottle["vineyard"], bottle["vintage"]) for bottle in cellar}
@@ -696,9 +739,18 @@ def check_handler(handler: Callable[[str], Any]) -> bool:
         ("'Merlot' raises ValueError naming the varietals in stock", lambda: expect_value_error("Merlot")),
     ]
 
+    return None, [(description, grade()) for description, grade in cases]
+
+
+def _report_cases(results: list[tuple[str, str | None]], noun: str) -> bool:
+    """Print graded cases and an overall verdict.
+
+    :param results: ``(description, hint)`` pairs, where a ``None`` hint means the case passed.
+    :param noun: What was graded, for the pass message, such as ``"handler"``.
+    :returns: ``True`` if every case passed.
+    """
     failures = 0
-    for description, grade in cases:
-        hint = grade()
+    for description, hint in results:
         if hint is None:
             print(f"  [pass] {description}")
         else:
@@ -706,5 +758,391 @@ def check_handler(handler: Callable[[str], Any]) -> bool:
             print(f"  [fail] {description}: {hint}")
 
     if failures:
-        return _not_yet(f"{failures} of {len(cases)} cases failed. Fix the first failing case, then run this check again.")
-    return _passed(f"All {len(cases)} handler cases pass.")
+        return _not_yet(f"{failures} of {len(results)} cases failed. Fix the first failing case, then run this check again.")
+    return _passed(f"All {len(results)} {noun} cases pass.")
+
+
+def check_handler(handler: Callable[[str], Any]) -> bool:
+    """Run ``check_cellar`` against fixed inputs, offline, and grade each case.
+
+    No API calls are made, so the result is the same every time. Hints say
+    what is wrong and why. The notebook's hint cells show code if you need it.
+
+    :param handler: Your ``check_cellar(varietal)`` function.
+    :returns: ``True`` if every case passes.
+    """
+    stub, results = _grade_handler(handler)
+    if stub is not None:
+        return _not_yet(stub)
+    return _report_cases(results, "handler")
+
+
+# ---------------------------------------------------------------------------
+# Stretch: grade bottles_to_drink_soon offline
+# ---------------------------------------------------------------------------
+
+DRINK_SOON_FIELDS: tuple[str, ...] = ("varietal", "vineyard", "vintage", "quantity", "drink_by")
+DRINK_SOON_CASES: tuple[tuple[int, int], ...] = ((2026, 1), (2026, 0), (2030, 0))
+
+
+def _grade_drink_soon(handler: Callable[..., Any]) -> tuple[str | None, list[tuple[str, str | None]]]:
+    """Grade ``bottles_to_drink_soon`` against the fixed offline cases, without printing.
+
+    :param handler: The learner's ``bottles_to_drink_soon(year, within_years)`` function.
+    :returns: A hint if the handler is still a stub (with no cases), otherwise
+        ``None`` and one ``(description, hint)`` pair per case.
+    """
+    stub = _stub_problem(handler, 2026, within_years=1)
+    if stub is not None:
+        return stub, []
+
+    bottle_of = {(bottle["vineyard"], bottle["vintage"]): bottle for bottle in load_cellar()}
+    shape = "{'year': ..., 'within_years': ..., 'bottles': [...]}"
+
+    def due_by(deadline: int) -> set[tuple[str, int]]:
+        """List the in-stock bottles due no later than a year.
+
+        :param deadline: The last drink-by year to include.
+        :returns: The matching ``(vineyard, vintage)`` pairs.
+        """
+        return {key for key, bottle in bottle_of.items() if bottle["quantity"] > 0 and bottle["drink_by"] <= deadline}
+
+    def describe(keys: set[tuple[str, int]]) -> str:
+        """List bottles by vintage and vineyard with their drink-by year, soonest first.
+
+        :param keys: The bottles to list.
+        :returns: A comma-separated description.
+        """
+        labels = []
+        for key in sorted(keys, key=lambda pair: (bottle_of.get(pair, {}).get("drink_by", 0), pair[1], pair[0])):
+            drink_by = bottle_of.get(key, {}).get("drink_by")
+            labels.append(_label(key) if drink_by is None else f"{_label(key)} (drink by {drink_by})")
+        return ", ".join(labels)
+
+    def grade(year: int, within_years: int) -> str | None:
+        """Grade one call of the handler.
+
+        :param year: The year to pass.
+        :param within_years: How many years ahead to look.
+        :returns: A hint if the case fails, otherwise ``None``.
+        """
+        result, error = _run_handler(handler, year, within_years=within_years)
+        if error is not None:
+            return (
+                f"raised {type(error).__name__}: {error}. Any year is a valid question, so the "
+                "tool should return a result, even when no bottle is due."
+            )
+        keys, shape_hint = _bottle_keys(result, shape)
+        if keys is None:
+            return shape_hint
+
+        deadline = year + within_years
+        expected = due_by(deadline)
+        if keys != expected:
+            parts: list[str] = []
+            this_year = date.today().year
+            if year != this_year and keys == due_by(this_year + within_years):
+                parts.append(
+                    f"These are the bottles for {this_year}, not {year}. Use the year argument, "
+                    "never today's date, so the answer is the same every time."
+                )
+                return " ".join(parts)
+            missing = expected - keys
+            extra = keys - expected
+            if missing:
+                parts.append(f"Missing: {describe(missing)}.")
+                if any(bottle_of[key]["drink_by"] < year for key in missing):
+                    parts.append(
+                        "A bottle already past its drink-by year is the most urgent one to open, "
+                        "so it belongs in the list."
+                    )
+                if any(bottle_of[key]["drink_by"] == deadline for key in missing):
+                    parts.append(f"A bottle due in {deadline} is due no later than {deadline}, so include it.")
+            if extra:
+                parts.append(f"Extra: {describe(extra)}.")
+                for key in sorted(extra, key=lambda pair: (pair[1], pair[0])):
+                    if bottle_of.get(key, {}).get("quantity") == 0:
+                        parts.append(f"{describe({key})} has quantity 0. A bottle you have finished is not one to open.")
+                if any(bottle_of.get(key, {}).get("drink_by", 0) > deadline for key in extra):
+                    parts.append(
+                        f"Bottles due after {deadline} are not due yet. Look ahead exactly "
+                        "within_years from the year you were given."
+                    )
+            return " ".join(parts)
+
+        bottles = result if isinstance(result, list) else result["bottles"]
+        absent = sorted({name for bottle in bottles for name in DRINK_SOON_FIELDS if name not in bottle})
+        if absent:
+            return (
+                f"each bottle needs {', '.join(DRINK_SOON_FIELDS)}, so Claude can name the wine. "
+                f"Missing: {', '.join(absent)}."
+            )
+        drink_by = [bottle["drink_by"] for bottle in bottles]
+        if drink_by != sorted(drink_by):
+            return (
+                "has the right bottles, but they should be listed soonest first, by drink_by, "
+                "so Claude leads with the most urgent one."
+            )
+        return shape_hint
+
+    results: list[tuple[str, str | None]] = []
+    for year, within_years in DRINK_SOON_CASES:
+        description = (
+            f"bottles_to_drink_soon(year={year}, within_years={within_years}) returns the "
+            f"{len(due_by(year + within_years))} in-stock bottles due by {year + within_years}, soonest first"
+        )
+        results.append((description, grade(year, within_years)))
+    return None, results
+
+
+def check_drink_soon(handler: Callable[..., Any]) -> bool:
+    """Run ``bottles_to_drink_soon`` against fixed years, offline, and grade each case.
+
+    The 2030 case catches a handler that reads today's date instead of its
+    ``year`` argument, and one that offers the finished Riesling.
+
+    :param handler: Your ``bottles_to_drink_soon(year, within_years)`` function.
+    :returns: ``True`` if every case passes.
+    """
+    stub, results = _grade_drink_soon(handler)
+    if stub is not None:
+        return _not_yet(stub)
+    return _report_cases(results, "drink-soon")
+
+
+# ---------------------------------------------------------------------------
+# Part 4: probe dispatch_tool offline, and the gate before the stretch
+# ---------------------------------------------------------------------------
+
+
+class PartNotFinishedError(Exception):
+    """Raised by the stretch gate so a notebook run stops before the stretch."""
+
+
+def _dispatch_problem(dispatch: Callable[[Any], Any]) -> str | None:
+    """Send ``dispatch_tool`` a fake Merlot request and check that it reports an error.
+
+    :param dispatch: The learner's ``dispatch_tool(tool_use)`` function.
+    :returns: A hint if the result is not an ``is_error`` tool_result, otherwise ``None``.
+    """
+    from anthropic.types import ToolUseBlock
+
+    probe = ToolUseBlock.model_validate(
+        {"type": "tool_use", "id": "toolu_offline_probe", "name": TOOL_NAME, "input": {"varietal": "Merlot"}}
+    )
+    result, error = _run_handler(dispatch, probe)
+    if isinstance(error, NotImplementedError):
+        return (
+            f"dispatch_tool still raises NotImplementedError ({error}). Write it in the Part 4 "
+            "dispatch cell, delete the raise line, and run that cell again."
+        )
+    if error is not None:
+        return (
+            f"dispatch_tool raised {type(error).__name__}: {error} for a Merlot request, so the "
+            "conversation would crash. Catch the ValueError and return {'type': 'tool_result', "
+            "'tool_use_id': tool_use.id, 'content': str(error), 'is_error': True}, for example "
+            "with tool_error(tool_use, str(error))."
+        )
+    if _field(result, "type") != "tool_result":
+        return "dispatch_tool did not return a tool_result block. Return a dict with 'type': 'tool_result'."
+    if _field(result, "tool_use_id") != probe.id:
+        return "dispatch_tool returned a tool_result with the wrong tool_use_id. Set 'tool_use_id': tool_use.id."
+    if _field(result, "is_error") is not True:
+        return (
+            "dispatch_tool answered a Merlot request without 'is_error': True, so Claude cannot "
+            "tell the request failed. Catch the ValueError and set 'is_error': True."
+        )
+    if not _tool_result_text(result).strip():
+        return "dispatch_tool's error result has no content. Set 'content' to str(error), so Claude can explain."
+    return None
+
+
+def check_dispatch(dispatch: Callable[[Any], Any]) -> bool:
+    """Check, offline, that ``dispatch_tool`` turns a bad request into an error result.
+
+    :param dispatch: Your ``dispatch_tool(tool_use)`` function.
+    :returns: ``True`` if a Merlot request comes back as an ``is_error`` tool_result.
+    """
+    problem = _dispatch_problem(dispatch)
+    if problem is not None:
+        return _not_yet(problem)
+    return _passed("dispatch_tool returns an is_error tool_result for a Merlot request instead of raising.")
+
+
+def check_stretch_ready(handler: Callable[[str], Any], dispatch: Callable[[Any], Any]) -> None:
+    """Stop the notebook before the stretch if Part 4 is not finished.
+
+    Runs ``check_handler``'s cases and the ``dispatch_tool`` probe offline.
+
+    :param handler: Your ``check_cellar`` function.
+    :param dispatch: Your Part 4 ``dispatch_tool`` function.
+    :raises PartNotFinishedError: If either one is not finished, naming what is missing.
+    """
+    missing: list[str] = []
+    stub, results = _grade_handler(handler)
+    if stub is not None:
+        missing.append("check_cellar is still the Part 4 TODO stub (it raises NotImplementedError).")
+    else:
+        failing = [description for description, hint in results if hint is not None]
+        if failing:
+            missing.append(
+                f"check_cellar still fails {len(failing)} of {len(results)} check_handler cases: "
+                f"{'; '.join(failing)}."
+            )
+    problem = _dispatch_problem(dispatch)
+    if problem is not None:
+        missing.append(problem)
+
+    if missing:
+        raise PartNotFinishedError(
+            "Finish Part 4 first: " + " ".join(missing) + " Run the Part 4 cells again, then this one."
+        )
+    _passed(
+        "Part 4 is finished: check_cellar passes every check_handler case, and dispatch_tool "
+        "returns errors to Claude. On to the stretch."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The end of the lab: one line per part
+# ---------------------------------------------------------------------------
+
+
+def _quietly(check: Callable[..., bool], *args: Any) -> bool:
+    """Run a check without printing its output.
+
+    :param check: A check function from this module.
+    :param args: Arguments for the check.
+    :returns: What the check returned.
+    """
+    with contextlib.redirect_stdout(io.StringIO()):
+        return check(*args)
+
+
+def _notebook_namespace() -> dict[str, Any]:
+    """Find the variables the notebook has defined.
+
+    :returns: The Jupyter user namespace, or ``__main__``'s globals outside Jupyter.
+    """
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        get_ipython = None
+    shell = get_ipython() if get_ipython is not None else None
+    if shell is not None:
+        return shell.user_ns
+    return vars(sys.modules["__main__"])
+
+
+def summary(namespace: dict[str, Any] | None = None) -> bool:
+    """Print each part of the lab with PASS or NOT YET.
+
+    Offline checks (setup, the handler, the dispatch probe, the stretch
+    handler) run again on the functions as they are now. Conversation checks
+    need the API, so they are reported from this session: a restarted kernel
+    forgets them until you run those cells again.
+
+    :param namespace: The notebook's variables. Leave it out in a notebook.
+    :returns: ``True`` if every required part is done. The stretch is optional.
+    """
+    if namespace is None:
+        namespace = _notebook_namespace()
+
+    def conversation(key: str, check: str, where: str) -> str | None:
+        """Report a conversation check from this session.
+
+        :param key: The name recorded in ``SESSION_PASSES``.
+        :param check: The checkpoint, for the hint.
+        :param where: Which cell to run again, for the hint.
+        :returns: A hint if it has not passed, otherwise ``None``.
+        """
+        if key in SESSION_PASSES:
+            return None
+        return f"{check} has not passed since the kernel started. Run the {where} again."
+
+    def function(name: str) -> Callable[..., Any] | None:
+        """Look up a function the notebook defines.
+
+        :param name: The function name.
+        :returns: The function, or ``None`` if it is not defined.
+        """
+        value = namespace.get(name)
+        return value if callable(value) else None
+
+    def graded(name: str, grade: Callable[[Callable[..., Any]], tuple[str | None, list[tuple[str, str | None]]]], check: str) -> str | None:
+        """Re-run an offline grader on a notebook function.
+
+        :param name: The function name.
+        :param grade: ``_grade_handler`` or ``_grade_drink_soon``.
+        :param check: The checkpoint, for the hint.
+        :returns: A hint if any case fails, otherwise ``None``.
+        """
+        handler = function(name)
+        if handler is None:
+            return f"{name} is not defined. Run its cell."
+        stub, results = grade(handler)
+        if stub is not None:
+            return f"{name} is still the TODO stub."
+        failing = sum(1 for _, hint in results if hint is not None)
+        if failing:
+            return f"{failing} of {len(results)} {check} cases fail. Run that cell for the hints."
+        return None
+
+    def dispatch() -> str | None:
+        """Re-run the dispatch probe.
+
+        :returns: A hint if it fails, otherwise ``None``.
+        """
+        handler = function("dispatch_tool")
+        if handler is None:
+            return "dispatch_tool is not defined. Run its cell."
+        if _dispatch_problem(handler) is not None:
+            return "a Merlot request does not come back as an is_error tool_result. Run lab_checks.check_dispatch(dispatch_tool) for the details."
+        return None
+
+    def sommelier() -> str | None:
+        """Check that the stretch system prompt was written.
+
+        :returns: A hint if it is missing, otherwise ``None``.
+        """
+        prompt = namespace.get("SOMMELIER_PROMPT")
+        if isinstance(prompt, str) and prompt.strip():
+            return None
+        return "SOMMELIER_PROMPT is not written yet."
+
+    rows: list[tuple[str, bool, str | None]] = [
+        ("Part 0: setup", True, None if _quietly(check_setup) else "run lab_checks.check_setup() for the details."),
+        ("Part 1: your first API call", True, conversation("part1", "check_part1", "Part 1 checkpoint")),
+        ("Part 2: Claude asks for the tool", True, conversation("part2", "check_part2", "Part 2 cells")),
+        ("Part 3: the conversation loop", True, conversation("part3", "check_part3", "run_conversation cell")),
+        ("Part 4: check_cellar handles every case", True, graded("check_cellar", _grade_handler, "check_handler")),
+        ("Part 4: dispatch_tool returns errors to Claude", True, dispatch()),
+        ("Part 4: the Merlot conversation recovers", True, conversation("part4", "check_part4", "Part 4 dispatch_tool cell")),
+        (
+            "Stretch (optional): bottles_to_drink_soon",
+            False,
+            graded("bottles_to_drink_soon", _grade_drink_soon, "check_drink_soon"),
+        ),
+        (
+            "Stretch (optional): Claude uses the second tool",
+            False,
+            conversation("stretch-conversation", "check_part3 on a drink-soon conversation", "stretch dispatch_tool cell"),
+        ),
+        ("Stretch (optional): the sommelier prompt", False, sommelier()),
+    ]
+
+    print("Lab summary")
+    for label, _, problem in rows:
+        if problem is None:
+            print(f"  PASS     {label}")
+        else:
+            print(f"  NOT YET  {label}: {problem}")
+
+    not_done = [label for label, required, problem in rows if required and problem is not None]
+    stretch = [problem for _, required, problem in rows if not required]
+    stretch_done = sum(1 for problem in stretch if problem is None)
+    if not_done:
+        print(f"NOT YET: {len(not_done)} required check(s) are not done, so the lab is not finished: {'; '.join(not_done)}.")
+        return False
+    print(f"PASS: every required part is done. Stretch: {stretch_done} of {len(stretch)} optional checks done.")
+    return True

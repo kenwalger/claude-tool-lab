@@ -100,6 +100,18 @@ def checkpoint(call: str) -> Cell:
     return code(call, "checkpoint")
 
 
+def then(*sources: str) -> str:
+    """Join sources into one cell, such as a function followed by its checkpoint.
+
+    A function and the check that grades it share a cell, so redefining the
+    function always re-runs the check.
+
+    :param sources: Triple-quoted sources, each cleaned on its own.
+    :returns: The sources separated by two blank lines.
+    """
+    return "\n\n\n".join(_clean(source) for source in sources)
+
+
 # ---------------------------------------------------------------------------
 # Reusable code sources. Each appears once here and wherever it is needed below.
 # ---------------------------------------------------------------------------
@@ -164,10 +176,24 @@ RUN_CONVERSATION_SOLUTION = '''
         return messages
 '''
 
-FIXED_HANDLER_SOLUTION = '''
+RUN_PINOT_NOIR = '''
+    messages = run_conversation("Do I have any Pinot Noir?")
+    show_conversation(messages)
+
+    lab_checks.check_part3(messages)
+'''
+
+RESULT_FIELDS_SOURCE = '''
+    # The fields Claude needs from each bottle. The fixed handler returns only these.
     RESULT_FIELDS: tuple[str, ...] = ("vineyard", "vintage", "region", "tasting_notes", "quantity", "drink_by")
+'''
 
+CHECK_HANDLER = '''
+    # The offline checker runs every time you run this cell.
+    lab_checks.check_handler(check_cellar)
+'''
 
+FIXED_HANDLER_SOLUTION = '''
     def normalize(varietal: str) -> str:
         """Put a varietal name in a standard form so casing and spacing do not matter.
 
@@ -213,7 +239,7 @@ FIXED_HANDLER_SOLUTION = '''
         return {"varietal": matching[0]["varietal"], "bottles": bottles}
 '''
 
-TOOL_ERROR_AND_DISPATCH_SOLUTION = '''
+TOOL_ERROR_SOURCE = '''
     def tool_error(tool_use: ToolUseBlock, message: str) -> dict:
         """Build a ``tool_result`` that tells Claude the tool failed, and why.
 
@@ -227,8 +253,17 @@ TOOL_ERROR_AND_DISPATCH_SOLUTION = '''
             "content": message,
             "is_error": True,
         }
+'''
 
+RUN_MERLOT = '''
+    # The same question that crashed at the start of Part 4.
+    merlot_messages = run_conversation("Do I have any Merlot?")
+    show_conversation(merlot_messages)
 
+    lab_checks.check_part4(merlot_messages)
+'''
+
+DISPATCH_SOLUTION = '''
     def dispatch_tool(tool_use: ToolUseBlock) -> dict:
         """Run the tool Claude asked for and wrap its output as a ``tool_result`` block.
 
@@ -278,6 +313,30 @@ DRINK_SOON_HANDLER_SOLUTION = '''
                 )
 
         return {"year": year, "within_years": within_years, "bottles": bottles}
+'''
+
+CHECK_DRINK_SOON = '''
+    # The offline checker runs every time you run this cell.
+    lab_checks.check_drink_soon(bottles_to_drink_soon)
+'''
+
+USE_BOTH_TOOLS = '''
+    # Attach both tools to every call ask_claude makes from now on.
+    TOOLS = [CHECK_CELLAR_TOOL, DRINK_SOON_TOOL]
+'''
+
+RUN_DRINK_SOON = '''
+    drink_messages = run_conversation("It is 2026. Which bottles should I open within the next year?")
+    show_conversation(drink_messages)
+
+    lab_checks.check_part3(drink_messages)
+'''
+
+RUN_RISOTTO = '''
+    risotto_messages = run_conversation("I'm making mushroom risotto tonight. Any Pinot Noir that would work?")
+    show_conversation(risotto_messages)
+
+    lab_checks.check_part3(risotto_messages)
 '''
 
 DRINK_SOON_TOOL_SOLUTION = '''
@@ -428,8 +487,16 @@ CELLS: list[Cell] = [
             **How this notebook works**
 
             - Run the cells in order with **Shift+Enter**.
-            - Cells with a **TODO** comment are yours to finish.
-            - Each part ends with a checkpoint that prints `PASS: ...`, or `NOT YET: ...` with a hint.
+            - Two labels tell failures apart:
+              - **YOUR TURN:** the next cell is yours to finish. A function you write starts as a single
+                `raise NotImplementedError("YOUR TURN: ...")` line. Replace that line with your code. An
+                error that starts with `YOUR TURN` is never one of the expected failures.
+              - **EXPECTED TO FAIL:** the next cell shows a bug on purpose. Read the error, then move on.
+            - Checkpoints print `PASS: ...`, or `NOT YET: ...` with a hint. When a cell defines a function
+              that has a checkpoint, the checkpoint is the cell's last line, so running the cell again
+              always checks your latest code.
+            - The last cell, `lab_checks.summary()`, lists every part with `PASS` or `NOT YET`, so you know
+              whether you are done.
             - Stuck? Open a **Hint** below the TODO. Hints go from a nudge to the full code, and
               `solution.ipynb` has every answer.
             - With the default model, each cell that calls the API costs a small fraction of a cent.
@@ -456,6 +523,7 @@ CELLS: list[Cell] = [
         import anthropic
         from anthropic.types import Message, ToolUseBlock
         from dotenv import load_dotenv
+        from IPython.display import Markdown, display
 
         import lab_checks
 
@@ -535,6 +603,10 @@ CELLS: list[Cell] = [
         - `content` is a **list of content blocks**, not a string. Every block has a `type`.
         - `stop_reason` says why Claude stopped.
         - `usage` counts the tokens in and out, which is what you pay for.
+
+        Claude often replies in Markdown (`**bold**`, lists, headings), and the API returns it as plain
+        text: rendering it is the client's job. This cell prints it raw; `show_conversation` in Part 3
+        renders it.
 
         **Thinking blocks.** This model thinks before it answers when a question calls for it, so
         `content` can start with a block of type `"thinking"`. By default its `thinking` text comes back
@@ -731,7 +803,8 @@ CELLS: list[Cell] = [
         `ask_claude` makes one API call with the tools attached, so the loop stays short.
         `show_conversation` prints a history so you can see what the loop did.
     """),
-    code('''
+    code(
+        '''
         TOOLS: list[dict] = [CHECK_CELLAR_TOOL]
 
 
@@ -753,7 +826,8 @@ CELLS: list[Cell] = [
             """Print a conversation one block at a time.
 
             Blocks you build yourself are dicts; blocks from ``response.content`` are SDK
-            objects. This prints both.
+            objects. This prints both. Claude's text is rendered as Markdown; every other
+            block is one plain line.
 
             :param messages: A history returned by ``run_conversation``.
             """
@@ -773,14 +847,18 @@ CELLS: list[Cell] = [
                     elif isinstance(block, dict):
                         print(f"[{role}] {block}")
                     elif block.type == "text":
-                        print(f"[{role}] {block.text}")
+                        # Claude often writes Markdown. Rendering it is the client's job.
+                        print(f"[{role}]")
+                        display(Markdown(block.text))
                     elif block.type == "tool_use":
                         print(f"[{role}] tool_use {block.name}({block.input}) id={block.id}")
                     elif block.type == "thinking":
                         print(f"[{role}] (thinking block, text hidden)")
                     else:
                         print(f"[{role}] ({block.type} block)")
-    '''),
+        ''',
+        "helpers",
+    ),
     md("""
         ### Your turn: write the loop
 
@@ -793,10 +871,16 @@ CELLS: list[Cell] = [
         - **Answer every tool request in the very next user message:** one user message, holding one
           `tool_result` per `tool_use`, each with the matching `tool_use_id`. `dispatch_tool` already
           builds those `tool_result` blocks for you.
+
+        The cell ends by asking "Do I have any Pinot Noir?" and running the checkpoint. The check looks
+        at the shape of the conversation, never at Claude's exact words: the tool was called, every
+        `tool_use` has a matching `tool_result`, the conversation ended with Claude's answer, and that
+        answer names a vineyard your tool actually returned.
     """),
     exercise(
-        solution=RUN_CONVERSATION_SOLUTION,
-        lab='''
+        then(RUN_CONVERSATION_SOLUTION, RUN_PINOT_NOIR),
+        then(
+            '''
             def run_conversation(user_message: str, max_turns: int = 5) -> list[dict]:
                 """Have a conversation in which Claude may call tools, and return the full history.
 
@@ -804,54 +888,44 @@ CELLS: list[Cell] = [
                 :param max_turns: The most API calls to make, so a confused loop cannot run forever.
                 :returns: Every message in the conversation, ending with Claude's final turn.
                 """
-                messages: list[dict] = [{"role": "user", "content": user_message}]
-                response = ask_claude(messages)
-                turns = 1
-
-                # TODO: loop while response.stop_reason == "tool_use" and turns < max_turns:
-                #   1. Append Claude's turn: {"role": "assistant", "content": response.content}.
-                #      Use response.content exactly as returned. Do not rebuild it from the text.
-                #   2. For each block in response.content whose block.type is "tool_use",
-                #      call dispatch_tool(block) and collect the tool_result it returns.
-                #   3. Append ONE user message whose content is the list of tool_results.
-                #   4. Call ask_claude(messages) again, store it in response, and add 1 to turns.
-
-                if response.stop_reason == "tool_use":
-                    print(f"Stopped after {max_turns} turns while Claude was still asking for tools.")
-
-                # TODO: append Claude's final turn the same way as step 1.
-
-                return messages
-        ''',
+                # TODO: write the loop.
+                #   1. Start the history: messages = [{"role": "user", "content": user_message}].
+                #   2. Call response = ask_claude(messages), and set turns = 1.
+                #   3. While response.stop_reason == "tool_use" and turns < max_turns:
+                #      a. Append Claude's turn: {"role": "assistant", "content": response.content}.
+                #         Use response.content exactly as returned. Do not rebuild it from the text.
+                #      b. For each block in response.content whose block.type is "tool_use",
+                #         call dispatch_tool(block) and collect the tool_result it returns.
+                #      c. Append ONE user message whose content is the list of tool_results.
+                #      d. Call ask_claude(messages) again, store it in response, and add 1 to turns.
+                #   4. Append Claude's final turn the same way as step 3a, and return messages.
+                raise NotImplementedError("YOUR TURN: write run_conversation (Part 3). This is not one of the expected failures.")
+            ''',
+            RUN_PINOT_NOIR,
+        ),
+        "run-conversation",
     ),
     _hint_cell(
         _details(
-            "Hint 1: the shape of the loop",
+            "Hint 1: the shape of the function",
             "```python\n"
+            'messages = [{"role": "user", "content": user_message}]   # step 1\n'
+            "response = ask_claude(messages)                           # step 2\n"
+            "turns = 1\n"
             'while response.stop_reason == "tool_use" and turns < max_turns:\n'
-            "    messages.append(...)        # step 1\n"
+            "    messages.append(...)        # step 3a\n"
             "    tool_results = []\n"
             "    for block in response.content:\n"
-            "        ...                     # step 2\n"
-            "    messages.append(...)        # step 3\n"
+            "        ...                     # step 3b\n"
+            "    messages.append(...)        # step 3c\n"
             "    response = ask_claude(messages)\n"
-            "    turns += 1                  # step 4\n"
+            "    turns += 1                  # step 3d\n"
+            "messages.append(...)            # step 4\n"
+            "return messages\n"
             "```",
         ),
         _details("Hint 2: the full function", _in_hint(RUN_CONVERSATION_SOLUTION)),
     ),
-    code("""
-        messages = run_conversation("Do I have any Pinot Noir?")
-        show_conversation(messages)
-    """),
-    md("""
-        ### Checkpoint
-
-        This check looks at the shape of the conversation, never at Claude's exact words: the tool was
-        called, every `tool_use` has a matching `tool_result`, the conversation ended with Claude's
-        answer, and that answer names a vineyard your tool actually returned.
-    """),
-    checkpoint("lab_checks.check_part3(messages)"),
     # ----- Part 4 -----------------------------------------------------------
     md("""
         ## Part 4: When the model surprises you (about 10 minutes)
@@ -866,15 +940,20 @@ CELLS: list[Cell] = [
         **Success looks like:** `check_handler(check_cellar)` and `check_part4(merlot_messages)` both
         print `PASS`.
     """),
-    code("""
-        # This is expected to fail. The try/except is here only so the notebook keeps
-        # running and you can read the traceback.
+    code(
+        """
+        # The try/except is here only so the notebook keeps running and you can read the
+        # traceback. An unfinished exercise (NotImplementedError) is not the expected failure.
         try:
             merlot_messages = run_conversation("Do I have any Merlot?")
             show_conversation(merlot_messages)
+        except NotImplementedError:
+            raise
         except Exception:
             traceback.print_exc()
-    """),
+        """,
+        "expected-failure",
+    ),
     md("""
         ### Read the traceback
 
@@ -885,7 +964,8 @@ CELLS: list[Cell] = [
 
         The fastest way to debug a tool is to call it directly. You do not need the API for that.
     """),
-    code('''
+    code(
+        '''
         def try_handler(varietal: str) -> None:
             """Call check_cellar directly and print what happens.
 
@@ -902,7 +982,9 @@ CELLS: list[Cell] = [
 
         for varietal in ["Pinot Noir", "Merlot", "pinot noir", "  Pinot Noir  ", "Riesling"]:
             try_handler(varietal)
-    '''),
+        ''',
+        "expected-failure",
+    ),
     md("""
         ### Three bugs, and you saw only one of them live
 
@@ -919,7 +1001,7 @@ CELLS: list[Cell] = [
         Here is what the offline checker makes of the starter handler. It makes no API calls, so it
         gives the same answer every time.
     """),
-    code("lab_checks.check_handler(check_cellar)"),
+    code("lab_checks.check_handler(check_cellar)", "expected-failure"),
     md("""
         ### Design decisions for the fix
 
@@ -935,11 +1017,16 @@ CELLS: list[Cell] = [
           tool raises `ValueError` with a message listing the varietals in stock, so Claude can suggest
           one. Out-of-stock varietals stay off that list, or Claude might suggest a wine you cannot open.
         - **Return only what Claude needs:** vineyard, vintage, region, tasting notes, quantity, and
-          drink-by year.
+          drink-by year. The next cell lists them in `RESULT_FIELDS`.
+
+        The handler cell ends with the offline checker, so each time you run it you see which cases
+        pass, with a hint for the ones that still fail.
     """),
+    code(RESULT_FIELDS_SOURCE, "result-fields"),
     exercise(
-        FIXED_HANDLER_SOLUTION,
-        '''
+        then(FIXED_HANDLER_SOLUTION, CHECK_HANDLER),
+        then(
+            '''
             def check_cellar(varietal: str) -> dict:
                 """Look up the in-stock bottles in the cellar for one varietal.
 
@@ -951,11 +1038,13 @@ CELLS: list[Cell] = [
                 #   1. Input that differs only in letter case or surrounding spaces still matches.
                 #   2. Only the whole varietal name matches ("Pinot Noir" does not return the rosé).
                 #   3. Bottles with quantity 0 are left out.
-                #   4. Each bottle has only vineyard, vintage, region, tasting_notes, quantity, drink_by.
+                #   4. Each bottle has only the fields in RESULT_FIELDS.
                 #   5. A varietal the cellar has held, with none in stock, returns an empty "bottles" list.
                 #   6. A varietal the cellar has never held raises ValueError naming the varietals in stock.
-                return {"varietal": varietal, "bottles": CELLAR_BY_VARIETAL[varietal]}
-        ''',
+                raise NotImplementedError("YOUR TURN: write check_cellar (Part 4). This is not one of the expected failures.")
+            ''',
+            CHECK_HANDLER,
+        ),
         "fixed-handler",
     ),
     _hint_cell(
@@ -984,19 +1073,13 @@ CELLS: list[Cell] = [
         ),
         _details(
             "Hint 3: keeping only the fields Claude needs",
+            "`RESULT_FIELDS` is defined in the cell above the handler. Build each bottle's summary from it:\n\n"
             "```python\n"
-            'RESULT_FIELDS = ("vineyard", "vintage", "region", "tasting_notes", "quantity", "drink_by")\n'
             "summary = {name: bottle[name] for name in RESULT_FIELDS}\n"
             "```",
         ),
         _details("Hint 4: the full handler", _in_hint(FIXED_HANDLER_SOLUTION)),
     ),
-    md("""
-        ### Checkpoint: the handler
-
-        Run this after each change. It reports every case, with a hint for the ones that still fail.
-    """),
-    checkpoint("lab_checks.check_handler(check_cellar)"),
     md("""
         ### Fix the dispatch function
 
@@ -1004,13 +1087,19 @@ CELLS: list[Cell] = [
         loop still crashes. That is the dispatch function's job: turn a failure into a `tool_result`
         that tells Claude what went wrong. The API has a flag for exactly this, `"is_error": True`.
         Claude reads the error message and answers the user, instead of your program dying.
+        `tool_error`, in the next cell, builds that result for you.
 
         Notice that only `ValueError` is caught. It means "the input was bad, tell Claude." Any other
         exception is a real bug in your code, and hiding it from you would make it harder to find.
+
+        The dispatch cell ends by asking about Merlot again, with the checkpoint. This time the tool
+        reports an error, and Claude recovers.
     """),
+    code(TOOL_ERROR_SOURCE, "tool-error"),
     exercise(
-        TOOL_ERROR_AND_DISPATCH_SOLUTION,
-        '''
+        then(DISPATCH_SOLUTION, RUN_MERLOT),
+        then(
+            '''
             def dispatch_tool(tool_use: ToolUseBlock) -> dict:
                 """Run the tool Claude asked for and wrap its output as a ``tool_result`` block.
 
@@ -1018,44 +1107,30 @@ CELLS: list[Cell] = [
                 :returns: A ``tool_result`` block. If the tool failed, it has ``"is_error": True``.
                 """
                 # TODO: keep the conversation alive when a tool fails.
-                #   1. Wrap the check_cellar call in try/except ValueError.
-                #   2. On ValueError, return {"type": "tool_result", "tool_use_id": tool_use.id,
-                #      "content": str(error), "is_error": True}.
-                #   3. For an unknown tool name, return the same kind of error result instead of raising.
-                if tool_use.name == "check_cellar":
-                    result = check_cellar(tool_use.input["varietal"])
-                else:
-                    raise ValueError(f"Unknown tool: {tool_use.name}")
-
-                return {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": json.dumps(result),
-                }
-        ''',
+                #   1. If tool_use.name is not "check_cellar", return
+                #      tool_error(tool_use, f"Unknown tool: {tool_use.name}").
+                #   2. Call check_cellar(tool_use.input["varietal"]) inside try/except ValueError.
+                #   3. On ValueError, return tool_error(tool_use, str(error)).
+                #   4. Otherwise, return {"type": "tool_result", "tool_use_id": tool_use.id,
+                #      "content": json.dumps(result)}.
+                raise NotImplementedError("YOUR TURN: write dispatch_tool (Part 4). This is not one of the expected failures.")
+            ''',
+            RUN_MERLOT,
+        ),
         "fixed-dispatch",
     ),
     _hint_cell(
-        _details("Hint: the full dispatch function", _in_hint(TOOL_ERROR_AND_DISPATCH_SOLUTION)),
+        _details("Hint: the full dispatch function", _in_hint(DISPATCH_SOLUTION)),
     ),
-    md("""
-        ### Re-run the conversation
-
-        Same question as before. This time the tool reports an error, and Claude recovers.
-    """),
-    code("""
-        merlot_messages = run_conversation("Do I have any Merlot?")
-        show_conversation(merlot_messages)
-    """),
-    checkpoint("lab_checks.check_part4(merlot_messages)"),
     md("""
         The fixed handler also takes care of casing, whether or not Claude tidies the input first:
     """),
     code("""
         pinot_messages = run_conversation("Anything pinot noir in there?")
         show_conversation(pinot_messages)
+
+        lab_checks.check_part3(pinot_messages)
     """),
-    checkpoint("lab_checks.check_part3(pinot_messages)"),
     # ----- Stretch ----------------------------------------------------------
     md("""
         ## Stretch (optional): a second tool and a sommelier
@@ -1067,15 +1142,23 @@ CELLS: list[Cell] = [
         descriptions. The year is a parameter rather than a reading of the system clock, so the answer
         is the same every time you run the lab.
 
-        **Success looks like:** Claude picks the right tool on its own, and `check_part3` passes for
-        both conversations.
+        **Success looks like:** `check_drink_soon(bottles_to_drink_soon)` prints `PASS`, Claude picks
+        the right tool on its own, and `check_part3` passes for both conversations.
 
         These cells replace `dispatch_tool` and `ask_claude`. If you go back to an earlier part, run
         its cells again first.
+
+        ### Before you start: is Part 4 finished?
+
+        The stretch builds on your Part 4 code. This cell runs `check_handler` and sends
+        `dispatch_tool` a fake Merlot request, both offline. If either is not finished, it stops here
+        with `Finish Part 4 first:` and names what is missing.
     """),
+    code("lab_checks.check_stretch_ready(check_cellar, dispatch_tool)", "stretch-gate"),
     exercise(
-        DRINK_SOON_HANDLER_SOLUTION,
-        '''
+        then(DRINK_SOON_HANDLER_SOLUTION, CHECK_DRINK_SOON),
+        then(
+            '''
             def bottles_to_drink_soon(year: int, within_years: int = 1) -> dict:
                 """Find in-stock bottles that should be opened by ``year + within_years``.
 
@@ -1083,11 +1166,14 @@ CELLS: list[Cell] = [
                 :param within_years: How many years ahead to look.
                 :returns: ``{"year": ..., "within_years": ..., "bottles": [...]}``, soonest first.
                 """
-                # TODO: return the in-stock bottles whose drink_by is no later than
+                # TODO: return {"year": year, "within_years": within_years, "bottles": [...]}, where
+                # "bottles" holds the in-stock bottles whose drink_by is no later than
                 # year + within_years (including any already past it), soonest first.
                 # Give each bottle its varietal, vineyard, vintage, quantity, and drink_by.
-                return {"year": year, "within_years": within_years, "bottles": []}
-        ''',
+                raise NotImplementedError("YOUR TURN: write bottles_to_drink_soon (Stretch). This is not one of the expected failures.")
+            ''',
+            CHECK_DRINK_SOON,
+        ),
         "drink-soon-handler",
     ),
     _hint_cell(
@@ -1098,8 +1184,9 @@ CELLS: list[Cell] = [
             print(bottle["drink_by"], bottle["vintage"], bottle["vineyard"], bottle["varietal"])
     """),
     exercise(
-        DRINK_SOON_TOOL_SOLUTION,
-        '''
+        then(DRINK_SOON_TOOL_SOLUTION, USE_BOTH_TOOLS),
+        then(
+            '''
             # TODO: write the definition for the second tool. Its input_schema needs a required
             # integer "year" and an optional integer "within_years". In the description, say
             # that Claude must use the year the user gives, and ask if there is none.
@@ -1112,43 +1199,53 @@ CELLS: list[Cell] = [
                     "required": [],
                 },
             }
-        ''',
+            ''',
+            USE_BOTH_TOOLS,
+        ),
     ),
     _hint_cell(
         _details("Hint: the full definition", _in_hint(DRINK_SOON_TOOL_SOLUTION)),
     ),
+    md("""
+        The dispatch cell ends by asking which bottles to open within the next year, with the
+        checkpoint, so you can see Claude choose the new tool.
+    """),
     exercise(
-        STRETCH_DISPATCH_SOLUTION,
-        '''
+        then(STRETCH_DISPATCH_SOLUTION, RUN_DRINK_SOON),
+        then(
+            '''
             def dispatch_tool(tool_use: ToolUseBlock) -> dict:
                 """Run whichever of the two tools Claude asked for, as a ``tool_result`` block.
 
                 :param tool_use: A ``tool_use`` block from ``response.content``.
                 :returns: A ``tool_result`` block. If the tool failed, it has ``"is_error": True``.
                 """
-                # TODO: copy your Part 4 dispatch_tool logic here, and add a branch for
-                # "bottles_to_drink_soon". Read the year with tool_use.input["year"], and
-                # within_years with tool_use.input.get("within_years", 1), because Claude
-                # may leave out an optional argument.
-                return {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": "This tool is not implemented yet.",
-                    "is_error": True,
-                }
-        ''',
+                # TODO: route both tools, with the same error handling as your Part 4 dispatch_tool.
+                #   1. "check_cellar": call check_cellar(tool_use.input["varietal"]).
+                #   2. "bottles_to_drink_soon": call bottles_to_drink_soon(tool_use.input["year"],
+                #      tool_use.input.get("within_years", 1)). Use .get(), because Claude may
+                #      leave out an optional argument.
+                #   3. Any other name: return tool_error(tool_use, f"Unknown tool: {tool_use.name}").
+                #   4. Catch ValueError and return tool_error(tool_use, str(error)).
+                raise NotImplementedError("YOUR TURN: write dispatch_tool for both tools (Stretch). This is not one of the expected failures.")
+            ''',
+            RUN_DRINK_SOON,
+        ),
         "stretch-dispatch",
     ),
     _hint_cell(
         _details("Hint: the full dispatch function", _in_hint(STRETCH_DISPATCH_SOLUTION)),
     ),
+    md("""
+        Last, the sommelier. The cell ends with a pairing question and the checkpoint.
+    """),
     exercise(
-        SOMMELIER_SOLUTION,
-        '''
+        then(SOMMELIER_SOLUTION, RUN_RISOTTO),
+        then(
+            '''
             # TODO: write a system prompt that makes Claude a sommelier who uses the tools,
             # never suggests a bottle the tools did not return, and always names the vintage,
-            # vineyard, and varietal. Then pass it to the API with system=SOMMELIER_PROMPT.
-            SOMMELIER_PROMPT: str = ""
+            # vineyard, and varietal. Assign it, as a string, to SOMMELIER_PROMPT here.
 
 
             def ask_claude(messages: list[dict]) -> Message:
@@ -1160,27 +1257,27 @@ CELLS: list[Cell] = [
                 return client.messages.create(
                     model=MODEL,
                     max_tokens=1024,
+                    # TODO: replace this comment with system=SOMMELIER_PROMPT,
                     tools=TOOLS,
                     messages=messages,
                 )
-        ''',
+            ''',
+            RUN_RISOTTO,
+        ),
+        "sommelier",
     ),
     _hint_cell(
         _details("Hint: the full prompt and ask_claude", _in_hint(SOMMELIER_SOLUTION)),
     ),
-    code("""
-        TOOLS = [CHECK_CELLAR_TOOL, DRINK_SOON_TOOL]
-
-        drink_messages = run_conversation("It is 2026. Which bottles should I open within the next year?")
-        show_conversation(drink_messages)
-    """),
-    checkpoint("lab_checks.check_part3(drink_messages)"),
-    code("""
-        risotto_messages = run_conversation("I'm making mushroom risotto tonight. Any Pinot Noir that would work?")
-        show_conversation(risotto_messages)
-    """),
-    checkpoint("lab_checks.check_part3(risotto_messages)"),
     # ----- Wrap-up ----------------------------------------------------------
+    md("""
+        ## Are you done?
+
+        This cell lists every part with `PASS` or `NOT YET`. It re-runs the offline checks on your
+        functions as they are now, and reports the conversation checks that have passed since the
+        kernel started. The stretch is optional, so it does not count against you.
+    """),
+    code("lab_checks.summary()", "summary"),
     md("""
         ## Where to go next
 
@@ -1195,6 +1292,38 @@ CELLS: list[Cell] = [
         To keep going, read the Claude documentation on tool use: <https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview>
     """),
 ]
+
+
+YOUR_TURN_BANNER: str = "**YOUR TURN:** replace the raise line with your code."
+YOUR_TURN_DATA_BANNER: str = "**YOUR TURN:** complete the TODO in the next cell."
+EXPECTED_TO_FAIL_BANNER: str = "**EXPECTED TO FAIL:** read the error, then move on."
+
+
+def _banner(source: str, tags: list[str]) -> str | None:
+    """Choose the banner that goes before a cell, so the two kinds of failure never look alike.
+
+    :param source: The cell's source in this notebook.
+    :param tags: The cell's tags in this notebook.
+    :returns: A banner for learner cells and intentional failures, otherwise ``None``.
+    """
+    if "expected-failure" in tags:
+        return EXPECTED_TO_FAIL_BANNER
+    if "todo" in tags:
+        return YOUR_TURN_BANNER if "raise NotImplementedError" in source else YOUR_TURN_DATA_BANNER
+    return None
+
+
+def _append(notebook: NotebookNode, node: NotebookNode, tags: list[str]) -> None:
+    """Add a cell with the next stable id.
+
+    :param notebook: The notebook being built.
+    :param node: The new cell.
+    :param tags: Tags for the cell, if any.
+    """
+    node.id = f"cell-{len(notebook.cells) + 1:02d}"
+    if tags:
+        node.metadata["tags"] = tags
+    notebook.cells.append(node)
 
 
 def build(variant: str) -> NotebookNode:
@@ -1222,14 +1351,15 @@ def build(variant: str) -> NotebookNode:
         if variant == "lab" and cell.kind == "code" and "# TODO" in source:
             tags.append("todo")
 
+        banner = _banner(source, tags)
+        if banner is not None:
+            _append(notebook, nbformat.v4.new_markdown_cell(banner), [])
+
         if cell.kind == "markdown":
             node = nbformat.v4.new_markdown_cell(source)
         else:
             node = nbformat.v4.new_code_cell(source)
-        node.id = f"cell-{len(notebook.cells) + 1:02d}"
-        if tags:
-            node.metadata["tags"] = tags
-        notebook.cells.append(node)
+        _append(notebook, node, tags)
 
     nbformat.validate(notebook)
     return notebook

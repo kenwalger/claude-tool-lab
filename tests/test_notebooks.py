@@ -64,11 +64,32 @@ def tagged_source(notebook: nbformat.NotebookNode, tag: str) -> str:
     return matches[0]
 
 
+def definitions_only(source: str) -> ast.Module:
+    """Keep a cell's definitions and drop the statements that act on them.
+
+    Cells end with a checkpoint call, and some run a conversation with the
+    live API. Dropping bare expressions and ``run_conversation(...)``
+    assignments leaves the functions and constants, which is what tests need.
+
+    :param source: A code cell's source.
+    :returns: A module holding only the definitions.
+    """
+    kept: list[ast.stmt] = []
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Expr):
+            continue
+        value = getattr(node, "value", None)
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "run_conversation":
+            continue
+        kept.append(node)
+    return ast.Module(body=kept, type_ignores=[])
+
+
 def run_cells(notebook: nbformat.NotebookNode, tags: list[str], monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Execute tagged offline cells, in order, in one fresh namespace.
+    """Execute the definitions in tagged cells, in order, in one fresh namespace.
 
     The imports cell is not run, because it loads the real ``.env``. The
-    namespace provides the names those cells need instead.
+    namespace provides the names those cells need instead. No API call runs.
 
     :param notebook: A parsed notebook.
     :param tags: Tags of the cells to run, in the order to run them.
@@ -78,7 +99,7 @@ def run_cells(notebook: nbformat.NotebookNode, tags: list[str], monkeypatch: pyt
     monkeypatch.chdir(ROOT)
     namespace: dict[str, Any] = {"json": json, "Path": Path, "ToolUseBlock": ToolUseBlock}
     for tag in tags:
-        exec(compile(tagged_source(notebook, tag), f"<{tag}>", "exec"), namespace)
+        exec(compile(definitions_only(tagged_source(notebook, tag)), f"<{tag}>", "exec"), namespace)
     return namespace
 
 
@@ -161,6 +182,93 @@ def test_lab_todo_cells_are_tagged() -> None:
         assert has_todo == tagged, cell.source[:80]
 
 
+# Each function with a checkpoint, and the call that must end its cell.
+CHECKED_CELLS: dict[str, str] = {
+    "run-conversation": "lab_checks.check_part3(messages)",
+    "fixed-handler": "lab_checks.check_handler(check_cellar)",
+    "fixed-dispatch": "lab_checks.check_part4(merlot_messages)",
+    "drink-soon-handler": "lab_checks.check_drink_soon(bottles_to_drink_soon)",
+    "stretch-dispatch": "lab_checks.check_part3(drink_messages)",
+    "sommelier": "lab_checks.check_part3(risotto_messages)",
+}
+
+
+def todo_stubs(cell_source: str) -> list[ast.FunctionDef]:
+    """Find the functions in a TODO cell that the learner writes from scratch.
+
+    ``ask_claude`` in the sommelier cell is the one exception: the learner adds
+    one argument on a marked line, so it is complete code, not a stub.
+
+    :param cell_source: A lab TODO cell's source.
+    :returns: The stub function definitions.
+    """
+    return [
+        node
+        for node in ast.parse(cell_source).body
+        if isinstance(node, ast.FunctionDef) and node.name != "ask_claude"
+    ]
+
+
+def test_lab_todo_stubs_raise_not_implemented() -> None:
+    """Every TODO stub body is only a docstring and ``raise NotImplementedError("YOUR TURN: ...")``.
+
+    Each stub is also called, so a placeholder that returns a plausible value
+    and fails quietly cannot slip back in.
+    """
+    stubs_seen: list[str] = []
+    for cell in read_notebook("lab").cells:
+        if "todo" not in cell.metadata.get("tags", []):
+            continue
+        for stub in todo_stubs(cell.source):
+            stubs_seen.append(stub.name)
+            body = list(stub.body)
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                body = body[1:]  # the docstring
+            assert len(body) == 1 and isinstance(body[0], ast.Raise), f"{stub.name} has code besides the raise"
+            raised = body[0].exc
+            assert isinstance(raised, ast.Call) and getattr(raised.func, "id", None) == "NotImplementedError"
+            assert isinstance(raised.args[0], ast.Constant) and raised.args[0].value.startswith("YOUR TURN: ")
+            assert raised.args[0].value.endswith("This is not one of the expected failures.")
+
+            namespace: dict[str, Any] = {"ToolUseBlock": ToolUseBlock}
+            exec(compile(ast.Module(body=[stub], type_ignores=[]), f"<{stub.name}>", "exec"), namespace)
+            arguments = [None] * (len(stub.args.args) - len(stub.args.defaults))
+            with pytest.raises(NotImplementedError, match="^YOUR TURN: "):
+                namespace[stub.name](*arguments)
+    assert sorted(stubs_seen) == sorted(
+        ["run_conversation", "check_cellar", "dispatch_tool", "bottles_to_drink_soon", "dispatch_tool"]
+    )
+
+
+def test_sommelier_todo_marks_the_system_line() -> None:
+    """The lab's ask_claude is complete except for one marked line where system= goes."""
+    lines = tagged_source(read_notebook("lab"), "sommelier").splitlines()
+    system_lines = [line for line in lines if "system=" in line]
+    assert len(system_lines) == 1
+    assert system_lines[0].strip().startswith("# TODO") and "system=SOMMELIER_PROMPT" in system_lines[0]
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+@pytest.mark.parametrize("tag", sorted(CHECKED_CELLS))
+def test_checkpoint_ends_the_cell_that_defines_the_function(variant: str, tag: str) -> None:
+    """Redefining a checked function always re-runs its check, because they share a cell."""
+    source = tagged_source(read_notebook(variant), tag)
+    assert source.rstrip().endswith(CHECKED_CELLS[tag])
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_shared_constants_live_in_given_cells(variant: str) -> None:
+    """RESULT_FIELDS is defined once, at module level, in a cell the learner does not edit."""
+    defining = [
+        cell
+        for cell in read_notebook(variant).cells
+        if cell.cell_type == "code" and "RESULT_FIELDS: tuple" in cell.source
+    ]
+    assert len(defining) == 1
+    assert "todo" not in defining[0].metadata.get("tags", [])
+    assert "result-fields" in defining[0].metadata.get("tags", [])
+
+
 def test_lab_code_does_not_give_away_the_fix() -> None:
     """The lesson's code lives only in the hint cells, not in lab code cells."""
     for cell in read_notebook("lab").cells:
@@ -203,19 +311,20 @@ def test_starter_dispatch_crashes_on_merlot(variant: str, monkeypatch: pytest.Mo
 
 def test_solution_handler_passes_check_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     """The fixed handler in solution.ipynb passes every offline case."""
-    namespace = run_cells(read_notebook("solution"), ["load-cellar", "fixed-handler"], monkeypatch)
+    namespace = run_cells(read_notebook("solution"), ["load-cellar", "result-fields", "fixed-handler"], monkeypatch)
     assert lab_checks.check_handler(namespace["check_cellar"]) is True
 
 
-def test_lab_handler_todo_still_fails_check_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lab's Part 4 handler cell is a TODO that still behaves like the starter."""
-    namespace = run_cells(read_notebook("lab"), ["load-cellar", "fixed-handler"], monkeypatch)
+def test_lab_handler_todo_fails_check_handler(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The lab's Part 4 handler cell is a stub, and the check says so in one line."""
+    namespace = run_cells(read_notebook("lab"), ["load-cellar", "result-fields", "fixed-handler"], monkeypatch)
     assert lab_checks.check_handler(namespace["check_cellar"]) is False
+    assert "NotImplementedError" in capsys.readouterr().out
 
 
 def test_solution_dispatch_returns_error_results(monkeypatch: pytest.MonkeyPatch) -> None:
     """The fixed dispatch turns bad input and unknown tools into is_error results."""
-    namespace = run_cells(read_notebook("solution"), ["load-cellar", "fixed-handler", "fixed-dispatch"], monkeypatch)
+    namespace = run_cells(read_notebook("solution"), ["load-cellar", "result-fields", "fixed-handler", "tool-error", "fixed-dispatch"], monkeypatch)
     dispatch = namespace["dispatch_tool"]
 
     merlot = dispatch(tool_use("check_cellar", {"varietal": "Merlot"}))
@@ -241,13 +350,14 @@ def test_solution_drink_soon_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     assert all(bottle["quantity"] > 0 for bottle in result["bottles"])
     assert len(result["bottles"]) == 6
     assert len(namespace["bottles_to_drink_soon"](2026, within_years=0)["bottles"]) == 3
+    assert lab_checks.check_drink_soon(namespace["bottles_to_drink_soon"]) is True
 
 
 def test_solution_stretch_dispatch_routes_both_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     """The stretch dispatch runs either tool and tolerates a missing optional argument."""
     namespace = run_cells(
         read_notebook("solution"),
-        ["load-cellar", "fixed-handler", "fixed-dispatch", "drink-soon-handler", "stretch-dispatch"],
+        ["load-cellar", "result-fields", "fixed-handler", "tool-error", "drink-soon-handler", "stretch-dispatch"],
         monkeypatch,
     )
     dispatch = namespace["dispatch_tool"]
@@ -255,3 +365,105 @@ def test_solution_stretch_dispatch_routes_both_tools(monkeypatch: pytest.MonkeyP
     assert "is_error" not in soon
     assert len(json.loads(soon["content"])["bottles"]) == 6
     assert dispatch(tool_use("check_cellar", {"varietal": "Merlot"}))["is_error"] is True
+
+
+# ---------------------------------------------------------------------------
+# Banners, the stretch gate, and the summary
+# ---------------------------------------------------------------------------
+
+YOUR_TURN: str = "**YOUR TURN:**"
+EXPECTED_TO_FAIL: str = "**EXPECTED TO FAIL:** read the error, then move on."
+
+
+def banner_before(notebook: nbformat.NotebookNode, index: int) -> str:
+    """Return the Markdown cell just before a cell, or an empty string.
+
+    :param notebook: A parsed notebook.
+    :param index: The cell's position.
+    :returns: The previous cell's source if it is Markdown.
+    """
+    previous = notebook.cells[index - 1] if index > 0 else None
+    return previous.source if previous is not None and previous.cell_type == "markdown" else ""
+
+
+def test_every_lab_todo_has_a_your_turn_banner() -> None:
+    """Each learner cell is introduced by YOUR TURN, and nothing else is."""
+    notebook = read_notebook("lab")
+    todo_indexes = [i for i, cell in enumerate(notebook.cells) if "todo" in cell.metadata.get("tags", [])]
+    for index in todo_indexes:
+        banner = banner_before(notebook, index)
+        assert banner.startswith(YOUR_TURN), notebook.cells[index].source[:60]
+        if "raise NotImplementedError" in notebook.cells[index].source:
+            assert banner == "**YOUR TURN:** replace the raise line with your code."
+    banners = [cell for cell in notebook.cells if cell.cell_type == "markdown" and cell.source.startswith(YOUR_TURN)]
+    assert len(banners) == len(todo_indexes)
+
+
+def test_solution_has_no_your_turn_banners() -> None:
+    """The solution has nothing for the learner to write."""
+    assert all(YOUR_TURN not in cell.source for cell in read_notebook("solution").cells)
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_every_intentional_failure_has_a_banner(variant: str) -> None:
+    """Each cell that fails on purpose is introduced by EXPECTED TO FAIL, and nothing else is."""
+    notebook = read_notebook(variant)
+    failing = [i for i, cell in enumerate(notebook.cells) if "expected-failure" in cell.metadata.get("tags", [])]
+    assert len(failing) == 3
+    for index in failing:
+        assert banner_before(notebook, index) == EXPECTED_TO_FAIL
+        assert "todo" not in notebook.cells[index].metadata.get("tags", [])
+    banners = [cell for cell in notebook.cells if cell.source == EXPECTED_TO_FAIL]
+    assert len(banners) == len(failing)
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_banners_are_plain_text(variant: str) -> None:
+    """Banner labels are plain ASCII, with no emoji."""
+    for cell in read_notebook(variant).cells:
+        if cell.source.startswith((YOUR_TURN, "**EXPECTED TO FAIL:**")):
+            assert cell.source.isascii()
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_summary_is_the_last_code_cell(variant: str) -> None:
+    """The notebook ends by reporting every part, so no one finishes thinking they are done when they are not."""
+    code_cells = [cell for cell in read_notebook(variant).cells if cell.cell_type == "code"]
+    assert code_cells[-1].source == "lab_checks.summary()"
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_stretch_gate_comes_before_the_stretch(variant: str) -> None:
+    """The gate runs after Part 4 and before the first stretch exercise."""
+    cells = read_notebook(variant).cells
+    tags = [cell.metadata.get("tags", []) for cell in cells]
+    gate = next(i for i, cell_tags in enumerate(tags) if "stretch-gate" in cell_tags)
+    stretch_heading = next(i for i, cell in enumerate(cells) if cell.source.startswith("## Stretch"))
+    first_exercise = next(i for i, cell_tags in enumerate(tags) if "drink-soon-handler" in cell_tags)
+    assert stretch_heading < gate < first_exercise
+    assert cells[gate].source.rstrip().endswith("lab_checks.check_stretch_ready(check_cellar, dispatch_tool)")
+
+
+PART4_TAGS: list[str] = ["load-cellar", "result-fields", "fixed-handler", "tool-error", "fixed-dispatch"]
+
+
+def test_solution_passes_the_stretch_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The finished Part 4 in solution.ipynb opens the stretch."""
+    namespace = run_cells(read_notebook("solution"), PART4_TAGS, monkeypatch)
+    lab_checks.check_stretch_ready(namespace["check_cellar"], namespace["dispatch_tool"])
+
+
+def test_untouched_lab_stops_at_the_stretch_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the Part 4 stubs unwritten, the gate stops the run and names both functions."""
+    namespace = run_cells(read_notebook("lab"), PART4_TAGS, monkeypatch)
+    with pytest.raises(lab_checks.PartNotFinishedError, match="^Finish Part 4 first: ") as raised:
+        lab_checks.check_stretch_ready(namespace["check_cellar"], namespace["dispatch_tool"])
+    assert "check_cellar" in str(raised.value) and "dispatch_tool" in str(raised.value)
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_show_conversation_renders_claude_text_as_markdown(variant: str) -> None:
+    """Claude's Markdown is rendered; the other block lines stay plain text."""
+    source = tagged_source(read_notebook(variant), "helpers")
+    assert "display(Markdown(block.text))" in source
+    assert 'print(f"[{role}] tool_use' in source

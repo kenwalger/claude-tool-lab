@@ -55,7 +55,7 @@ Leave `prompt.md` and `commit-message.txt` alone except as described under "Git 
 
 ## Lab structure (both notebooks follow these parts and headings)
 
-Each part opens with a short Markdown cell: what you will do, why it matters, and what success looks like. Each part ends with a checkpoint cell that calls a function from `lab_checks.py` and prints a clear pass message or a specific hint.
+Each part opens with a short Markdown cell: what you will do, why it matters, and what success looks like. Each part ends with a checkpoint that calls a function from `lab_checks.py` (in its own cell, or as the last line of the cell that defines the function it checks; see "Lab-authoring rules") and prints a clear pass message or a specific hint.
 
 ### Part 0: Setup (about 5 minutes)
 
@@ -70,6 +70,7 @@ Each part opens with a short Markdown cell: what you will do, why it matters, an
 - Explain the thinking block that may appear first (it can come back empty except for a signature), and why code must select content blocks **by type, never by position**.
 - In the stop-reasons walkthrough, mention `end_turn`, `tool_use`, `max_tokens`, and `refusal`.
 - Teaching point: the response is structured data, not a string.
+- Say that Claude often replies in Markdown and rendering it is the client's job. `show_conversation` (Part 3) renders assistant text blocks with `IPython.display.Markdown` and prints every other block as one plain line.
 - Checkpoint: `check_part1(response)` verifies `stop_reason == "end_turn"` and that the content **contains** a text block.
 
 ### Part 2: Give Claude a tool (about 10 minutes)
@@ -106,9 +107,16 @@ Each part opens with a short Markdown cell: what you will do, why it matters, an
 
 ### Stretch (optional)
 
+- A gate comes first: `check_stretch_ready(check_cellar, dispatch_tool)` runs the `check_handler` cases and sends `dispatch_tool` a fake Merlot `tool_use`, offline. If either fails, it raises `PartNotFinishedError` with "Finish Part 4 first: ..." naming what is missing, so a run stops before the stretch.
+
 - Add a second tool, `bottles_to_drink_soon(year: int, within_years: int = 1)`, using `drink_by`. The year is a parameter (never the system clock) so results stay deterministic.
 - Add a system prompt that makes Claude act as a sommelier who always names the vineyard and vintage.
 - TODO cells in `lab.ipynb`; complete in `solution.ipynb`.
+
+### End of the lab
+
+- The last code cell is `lab_checks.summary()`. It prints every part with PASS or NOT YET: it re-runs the offline checks (setup, the handler, the dispatch probe, the stretch handler) on the functions as they are now, and reports which conversation checks have passed since the kernel started. The stretch is listed but optional. A learner should not be able to finish feeling done when they are not.
+- Checkpoint: `check_drink_soon(bottles_to_drink_soon)` grades the handler offline, like `check_handler`: 2026 with `within_years` 1 and 0, plus 2030 with `within_years` 0, which catches a handler that reads the system clock or keeps the quantity-0 Riesling.
 
 ## The planted bug (lab.ipynb only)
 
@@ -142,7 +150,9 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 
 ## lab_checks.py
 
-- Pure functions with type hints and Sphinx docstrings: `check_setup`, `check_part1`, `check_part2`, `check_part3`, `check_handler`, plus a light check for the Part 4 re-run.
+- Pure functions with type hints and Sphinx docstrings: `check_setup`, `check_part1`, `check_part2`, `check_part3`, `check_handler`, `check_drink_soon`, `check_dispatch` (the offline Merlot probe), plus a light check for the Part 4 re-run, the stretch gate `check_stretch_ready`, and `summary`.
+- The conversation checks record their passes in `SESSION_PASSES`, so `summary` can report them without calling the API.
+- When a graded function still raises `NotImplementedError`, the check prints one hint saying the TODO is unfinished, instead of failing every case.
 - Each prints `PASS: ...` or `NOT YET: ...` with a specific, actionable hint. No emoji. Return a `bool` as well so tests can use it.
 - Learners never see bottle IDs, so learner-facing hints and case descriptions name bottles by vintage and vineyard (for example "2019 Crooked Lantern Vineyard"). When the Pinot Noir case fails, the hint lists which bottles are missing and which are extra.
 - Hint specificity: for API plumbing (the `tool_result` shape, `json.dumps`, `max_tokens`, selecting blocks by type), give the exact syntax. For the lesson itself (normalizing input, quantity 0, an empty result versus `ValueError`), say what is wrong and why, without the code. The code-level hints for the lesson live in collapsible hint cells in the notebook.
@@ -159,6 +169,15 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 - `tests/test_notebooks.py` asserts both notebooks are valid and committed with no outputs.
 - No test may call the real API. Run with `uv run pytest`.
 
+## Lab-authoring rules
+
+These come from a pilot run, where every TODO placeholder that returned a plausible value was left in place under the learner's new code and failed quietly.
+
+1. **TODO stubs fail loudly.** The body of every TODO function stub is only `raise NotImplementedError("YOUR TURN: write <function> (<part>). This is not one of the expected failures.")`, after its docstring and TODO comments. No plausible return values, and no starter code to copy from. The one exception is the stretch `ask_claude`: it stays complete, with a TODO comment on the exact line where `system=` goes. `tests/test_notebooks.py` asserts every lab stub has that body and raises when called.
+2. **A checkpoint shares a cell with the function it checks.** The check call is the last line of the cell that defines the function (`check_handler(check_cellar)`, `check_drink_soon(bottles_to_drink_soon)`, and `check_part3` or `check_part4` after the conversation that exercises `run_conversation` or `dispatch_tool`), so redefining the function always re-runs the check.
+3. **Shared constants and helpers live in given cells.** Anything a TODO needs but is not the lesson, such as `RESULT_FIELDS` or the `tool_error` helper, is defined at module level in a cell the learner does not edit, never inside a TODO stub.
+4. **Intentional failures and learner cells never look alike.** A Markdown banner goes before each one, in plain text with no emoji. Before every cell that fails on purpose (tagged `expected-failure`): "EXPECTED TO FAIL: read the error, then move on." Before every learner cell: "YOUR TURN: replace the raise line with your code." (or "YOUR TURN: complete the TODO in the next cell." when there is no raise line). The build script inserts the banners from the tags. A cell that fails on purpose must not swallow a `NotImplementedError`. This rule comes from a second pilot, where the author took Part 4's unfinished-TODO errors for more of the intended failures and skipped the TODOs.
+
 ## Notebook hygiene
 
 - Generate both notebooks with `scripts/build_notebooks.py` (using `nbformat`) from one set of cell sources: `solution.ipynb` first, then `lab.ipynb` with the TODOs and planted bug swapped in. Edit the build script, not the notebooks, and regenerate.
@@ -167,7 +186,7 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 
 ## README.md (learner-facing)
 
-Sections, in order: what you will build (one paragraph and the four outcomes), prerequisites (Python 3.12+, `uv`, an Anthropic API key, approximate cost), setup (clone, `uv sync`, copy `.env.example` to `.env`, PowerShell and bash variants), run (`uv run jupyter lab`, open `lab.ipynb`), how the checkpoints work, troubleshooting (key not found, wrong kernel, authentication error, rate limit, model not found, turn ended on `max_tokens`), and where to go next.
+Sections, in order: what you will build (one paragraph and the four outcomes), prerequisites (Python 3.12+, `uv`, an Anthropic API key, approximate cost), setup (clone, `uv sync`, copy `.env.example` to `.env`, PowerShell and bash variants), run (`uv run jupyter lab`, open `lab.ipynb`), how the checkpoints work, troubleshooting (key not found, wrong kernel, authentication error, rate limit, model not found, turn ended on `max_tokens`, Jupyter asks for a password or token: open the full URL that `uv run jupyter lab` prints, which includes `?token=`, or run `uv run jupyter server list` to see it again; do not suggest disabling the token), and where to go next.
 
 ## docs/instructor-notes.md
 
