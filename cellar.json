@@ -1,0 +1,122 @@
+[
+  {
+    "id": "B001",
+    "vineyard": "Crooked Lantern Vineyard",
+    "vintage": 2019,
+    "varietal": "Pinot Noir",
+    "region": "Eola-Amity Hills",
+    "tasting_notes": "Dark cherry, forest floor, and a touch of clove. Firm acidity with fine-grained tannins.",
+    "quantity": 3,
+    "drink_by": 2028
+  },
+  {
+    "id": "B002",
+    "vineyard": "Fernhollow Estate",
+    "vintage": 2021,
+    "varietal": "Pinot Noir",
+    "region": "Dundee Hills",
+    "tasting_notes": "Red raspberry, rose petal, and red-clay earthiness. Silky, still young.",
+    "quantity": 2,
+    "drink_by": 2031
+  },
+  {
+    "id": "B003",
+    "vineyard": "Silver Mile Cellars",
+    "vintage": 2020,
+    "varietal": "Chardonnay",
+    "region": "Willamette Valley",
+    "tasting_notes": "Meyer lemon, toasted hazelnut, and a flinty finish. Restrained oak.",
+    "quantity": 1,
+    "drink_by": 2027
+  },
+  {
+    "id": "B004",
+    "vineyard": "Thimbleberry Estate",
+    "vintage": 2023,
+    "varietal": "Pinot Gris",
+    "region": "Willamette Valley",
+    "tasting_notes": "Ripe pear, white peach, and honeysuckle. Bright and easy.",
+    "quantity": 4,
+    "drink_by": 2026
+  },
+  {
+    "id": "B005",
+    "vineyard": "Quarry Hill Wineworks",
+    "vintage": 2018,
+    "varietal": "Syrah",
+    "region": "Walla Walla Valley",
+    "tasting_notes": "Smoked meat, black olive, and blackberry over a savory, stony core.",
+    "quantity": 2,
+    "drink_by": 2030
+  },
+  {
+    "id": "B006",
+    "vineyard": "Copperleaf Ridge",
+    "vintage": 2017,
+    "varietal": "Cabernet Sauvignon",
+    "region": "Columbia Valley",
+    "tasting_notes": "Cassis, graphite, and cedar. Structured, with tannins just starting to soften.",
+    "quantity": 1,
+    "drink_by": 2032
+  },
+  {
+    "id": "B007",
+    "vineyard": "Larkspur Bend",
+    "vintage": 2020,
+    "varietal": "Red Blend",
+    "region": "Rogue Valley",
+    "tasting_notes": "Grenache, Syrah, and Mourvedre. Strawberry, dried herbs, and white pepper.",
+    "quantity": 2,
+    "drink_by": 2027
+  },
+  {
+    "id": "B008",
+    "vineyard": "Winter Heron Cellars",
+    "vintage": 2022,
+    "varietal": "Riesling",
+    "region": "Columbia Gorge",
+    "tasting_notes": "Lime zest, green apple, and wet stone. Off-dry with racy acidity.",
+    "quantity": 0,
+    "drink_by": 2030
+  },
+  {
+    "id": "B009",
+    "vineyard": "Old Mill Road Vineyards",
+    "vintage": 2015,
+    "varietal": "Pinot Noir",
+    "region": "Willamette Valley",
+    "tasting_notes": "Dried cherry, mushroom, and tea leaf. Fully mature and fading gracefully.",
+    "quantity": 1,
+    "drink_by": 2025
+  },
+  {
+    "id": "B010",
+    "vineyard": "Gray Fox Hollow",
+    "vintage": 2019,
+    "varietal": "Tempranillo",
+    "region": "Umpqua Valley",
+    "tasting_notes": "Plum, leather, and tobacco leaf with a dusty finish.",
+    "quantity": 2,
+    "drink_by": 2029
+  },
+  {
+    "id": "B011",
+    "vineyard": "Fernhollow Estate",
+    "vintage": 2024,
+    "varietal": "Rosé of Pinot Noir",
+    "region": "Dundee Hills",
+    "tasting_notes": "Watermelon, wild strawberry, and a crisp mineral finish.",
+    "quantity": 3,
+    "drink_by": 2026
+  },
+  {
+    "id": "B012",
+    "vineyard": "Otterbrook Estate",
+    "vintage": 2022,
+    "varietal": "Gamay Noir",
+    "region": "Eola-Amity Hills",
+    "tasting_notes": "Crunchy red fruit, violet, and a little black pepper. Serve slightly chilled.",
+    "quantity": 2,
+    "drink_by": 2027
+  }
+]
