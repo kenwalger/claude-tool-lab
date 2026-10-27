@@ -119,11 +119,11 @@ CELLAR_BY_VARIETAL: dict[str, list[dict]] = {}
 for bottle in CELLAR:
     CELLAR_BY_VARIETAL.setdefault(bottle["varietal"], []).append(bottle)
 
-def check_cellar(varietal: str) -> list[dict]:
-    return CELLAR_BY_VARIETAL[varietal]
+def check_cellar(varietal: str) -> dict:
+    return {"varietal": varietal, "bottles": CELLAR_BY_VARIETAL[varietal]}
 ```
 
-It works for `"Pinot Noir"` and fails in three realistic ways:
+The starter already returns the right shape, so `"Pinot Noir"` passes and the learner starts `check_handler` at 1 of 5. The bug is the exact-key lookup, and it fails in three realistic ways:
 
 1. `"Merlot"` raises `KeyError` (never in the cellar), and the exception crashes the conversation loop.
 2. `"pinot noir"` or `" Pinot Noir "` raises `KeyError` (case and whitespace).
@@ -144,6 +144,8 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 
 - Pure functions with type hints and Sphinx docstrings: `check_setup`, `check_part1`, `check_part2`, `check_part3`, `check_handler`, plus a light check for the Part 4 re-run.
 - Each prints `PASS: ...` or `NOT YET: ...` with a specific, actionable hint. No emoji. Return a `bool` as well so tests can use it.
+- Learners never see bottle IDs, so learner-facing hints and case descriptions name bottles by vintage and vineyard (for example "2019 Crooked Lantern Vineyard"). When the Pinot Noir case fails, the hint lists which bottles are missing and which are extra.
+- Hint specificity: for API plumbing (the `tool_result` shape, `json.dumps`, `max_tokens`, selecting blocks by type), give the exact syntax. For the lesson itself (normalizing input, quantity 0, an empty result versus `ValueError`), say what is wrong and why, without the code. The code-level hints for the lesson live in collapsible hint cells in the notebook.
 - Accept message content as plain dicts or SDK objects.
 - `check_handler` test cases, at minimum:
   - `"Pinot Noir"` returns exactly B001, B002, and B009, and not B011 or B012;

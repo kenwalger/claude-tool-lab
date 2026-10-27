@@ -269,7 +269,3 @@ cython_debug/
 
 
 commit-message.txt
-friction-log/*
-
-# Local agent construction ledgers (not part of the lab)
-.aqg/
