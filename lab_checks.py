@@ -306,6 +306,12 @@ def _history_problem(messages: Any) -> str | None:
             return "Every message should be a dict with a 'role' of 'user' or 'assistant' and a 'content'."
     if _field(messages[0], "role") != "user":
         return "The conversation should start with the user's message."
+    if not any(_field(message, "role") == "assistant" for message in messages):
+        return (
+            "The history holds only your message, so none of Claude's turns were recorded. "
+            "Finish the TODOs in run_conversation: inside the loop and after it, append "
+            "{'role': 'assistant', 'content': response.content}."
+        )
     return None
 
 

@@ -436,6 +436,16 @@ def test_check_part3_fails_when_no_tool_was_called() -> None:
     assert lab_checks.check_part3(history) is False
 
 
+@pytest.mark.parametrize("check", [lab_checks.check_part3, lab_checks.check_part4])
+def test_unfinished_loop_points_at_the_todo(check: Callable[[Any], bool], capsys: pytest.CaptureFixture[str]) -> None:
+    """A history with only the user's message means the loop TODO is unfinished, not that tools are missing."""
+    assert check([{"role": "user", "content": "Do I have any Pinot Noir?"}]) is False
+    output = capsys.readouterr().out
+    assert "run_conversation" in output
+    assert "response.content" in output
+    assert "never called the tool" not in output
+
+
 @pytest.mark.parametrize("not_a_history", [None, "text", [], {"role": "user"}])
 def test_check_part3_handles_unfinished_todo(not_a_history: Any, capsys: pytest.CaptureFixture[str]) -> None:
     """An unfinished TODO (returning None or junk) gives a hint, not a traceback."""
