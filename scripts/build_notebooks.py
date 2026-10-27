@@ -194,24 +194,6 @@ CHECK_HANDLER = '''
 '''
 
 FIXED_HANDLER_SOLUTION = '''
-    def normalize(varietal: str) -> str:
-        """Put a varietal name in a standard form so casing and spacing do not matter.
-
-        :param varietal: A varietal name as Claude or a user wrote it.
-        :returns: The name without surrounding spaces, in case-folded form.
-        """
-        return varietal.strip().casefold()
-
-
-    def varietals_in_stock() -> list[str]:
-        """List the varietals that have at least one bottle left.
-
-        :returns: Varietal names, sorted alphabetically.
-        """
-        names = {bottle["varietal"] for bottle in CELLAR if bottle["quantity"] > 0}
-        return sorted(names)
-
-
     def check_cellar(varietal: str) -> dict:
         """Look up the in-stock bottles in the cellar for one varietal.
 
@@ -219,14 +201,16 @@ FIXED_HANDLER_SOLUTION = '''
         :returns: ``{"varietal": ..., "bottles": [...]}`` with in-stock bottles only.
         :raises ValueError: If the cellar has never held this varietal.
         """
-        wanted = normalize(varietal)
+        # Put both sides in the same form, so casing and surrounding spaces do not matter.
+        wanted = varietal.strip().casefold()
 
         # Exact match on the normalized name, so "Pinot Noir" does not find the rosé.
-        matching = [bottle for bottle in CELLAR if normalize(bottle["varietal"]) == wanted]
+        matching = [bottle for bottle in CELLAR if bottle["varietal"].strip().casefold() == wanted]
         if not matching:
+            in_stock = sorted({bottle["varietal"] for bottle in CELLAR if bottle["quantity"] > 0})
             raise ValueError(
                 f"The cellar has never held {varietal.strip()!r}. "
-                f"Varietals in stock: {', '.join(varietals_in_stock())}."
+                f"Varietals in stock: {', '.join(in_stock)}."
             )
 
         # A varietal you have run out of is a valid question with an empty answer.
@@ -330,6 +314,11 @@ RUN_DRINK_SOON = '''
     show_conversation(drink_messages)
 
     lab_checks.check_part3(drink_messages)
+'''
+
+CHECK_SOMMELIER = '''
+    # An offline check first: does ask_claude send your prompt as the system prompt?
+    lab_checks.check_sommelier(ask_claude)
 '''
 
 RUN_RISOTTO = '''
@@ -1041,6 +1030,7 @@ CELLS: list[Cell] = [
                 #   4. Each bottle has only the fields in RESULT_FIELDS.
                 #   5. A varietal the cellar has held, with none in stock, returns an empty "bottles" list.
                 #   6. A varietal the cellar has never held raises ValueError naming the varietals in stock.
+                # Helper functions are welcome.
                 raise NotImplementedError("YOUR TURN: write check_cellar (Part 4). This is not one of the expected failures.")
             ''',
             CHECK_HANDLER,
@@ -1078,7 +1068,11 @@ CELLS: list[Cell] = [
             "summary = {name: bottle[name] for name in RESULT_FIELDS}\n"
             "```",
         ),
-        _details("Hint 4: the full handler", _in_hint(FIXED_HANDLER_SOLUTION)),
+        _details(
+            "Hint 4: the full handler",
+            _in_hint(FIXED_HANDLER_SOLUTION)
+            + "\n\nHint 1's normalize helper makes this tidier, and helper functions are welcome.",
+        ),
     ),
     md("""
         ### Fix the dispatch function
@@ -1237,15 +1231,17 @@ CELLS: list[Cell] = [
         _details("Hint: the full dispatch function", _in_hint(STRETCH_DISPATCH_SOLUTION)),
     ),
     md("""
-        Last, the sommelier. The cell ends with a pairing question and the checkpoint.
+        Last, the sommelier. The cell checks offline that `ask_claude` sends your prompt, then asks a
+        pairing question and runs the checkpoint.
     """),
     exercise(
-        then(SOMMELIER_SOLUTION, RUN_RISOTTO),
+        then(SOMMELIER_SOLUTION, CHECK_SOMMELIER, RUN_RISOTTO),
         then(
             '''
             # TODO: write a system prompt that makes Claude a sommelier who uses the tools,
             # never suggests a bottle the tools did not return, and always names the vintage,
             # vineyard, and varietal. Assign it, as a string, to SOMMELIER_PROMPT here.
+            SOMMELIER_PROMPT: str = ""
 
 
             def ask_claude(messages: list[dict]) -> Message:
@@ -1262,6 +1258,7 @@ CELLS: list[Cell] = [
                     messages=messages,
                 )
             ''',
+            CHECK_SOMMELIER,
             RUN_RISOTTO,
         ),
         "sommelier",

@@ -467,3 +467,64 @@ def test_show_conversation_renders_claude_text_as_markdown(variant: str) -> None
     source = tagged_source(read_notebook(variant), "helpers")
     assert "display(Markdown(block.text))" in source
     assert 'print(f"[{role}] tool_use' in source
+
+
+# ---------------------------------------------------------------------------
+# Pilot 3: the check_cellar hint and the sommelier check
+# ---------------------------------------------------------------------------
+
+
+def full_handler_hint() -> str:
+    """Return the lab's last check_cellar hint, the one with the full code.
+
+    :returns: The Markdown of that ``<details>`` block.
+    """
+    for cell in read_notebook("lab").cells:
+        if cell.cell_type == "markdown" and "Hint 4: the full handler" in cell.source:
+            return cell.source.split("Hint 4: the full handler", 1)[1]
+    raise AssertionError("no full-handler hint found")
+
+
+def test_full_handler_hint_is_one_function() -> None:
+    """The full-code hint matches the TODO: one check_cellar, normalization inline."""
+    hint = full_handler_hint()
+    code_block = hint.split("```python\n", 1)[1].split("```", 1)[0]
+    functions = [node.name for node in ast.parse(code_block).body if isinstance(node, ast.FunctionDef)]
+    assert functions == ["check_cellar"]
+    assert ".strip().casefold()" in code_block
+    assert "Hint 1's normalize helper makes this tidier, and helper functions are welcome." in hint
+
+
+def test_handler_todo_welcomes_helpers() -> None:
+    """The TODO itself says helper functions are welcome."""
+    assert "Helper functions are welcome." in tagged_source(read_notebook("lab"), "fixed-handler")
+
+
+def test_sommelier_stub_has_a_placeholder() -> None:
+    """The lab's sommelier cell defines an empty SOMMELIER_PROMPT under its TODO."""
+    source = tagged_source(read_notebook("lab"), "sommelier")
+    assert 'SOMMELIER_PROMPT: str = ""' in source
+    assert source.index("# TODO: write a system prompt") < source.index('SOMMELIER_PROMPT: str = ""')
+
+
+@pytest.mark.parametrize("variant", ["solution", "lab"])
+def test_sommelier_cell_checks_before_the_conversation(variant: str) -> None:
+    """check_sommelier runs offline before the risotto conversation spends an API call."""
+    source = tagged_source(read_notebook(variant), "sommelier")
+    assert source.index("lab_checks.check_sommelier(ask_claude)") < source.index("run_conversation(")
+
+
+@pytest.mark.parametrize(("variant", "expected"), [("solution", True), ("lab", False)])
+def test_sommelier_cell_against_check_sommelier(variant: str, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The solution's ask_claude sends a system prompt; the lab's starting point does not."""
+    import anthropic
+
+    namespace = run_cells(read_notebook(variant), [], monkeypatch)
+    namespace.update(
+        client=anthropic.Anthropic(api_key="sk-ant-test-key"),
+        MODEL="claude-haiku-5-5",
+        TOOLS=[],
+        Message=object,
+    )
+    exec(compile(definitions_only(tagged_source(read_notebook(variant), "sommelier")), "<sommelier>", "exec"), namespace)
+    assert lab_checks.check_sommelier(namespace["ask_claude"]) is expected

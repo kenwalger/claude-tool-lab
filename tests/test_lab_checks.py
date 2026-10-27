@@ -867,7 +867,7 @@ def finished_namespace() -> dict[str, Any]:
         "check_cellar": reference_check_cellar,
         "dispatch_tool": reference_dispatch,
         "bottles_to_drink_soon": reference_drink_soon,
-        "SOMMELIER_PROMPT": "You are a sommelier.",
+        "ask_claude": make_ask_claude(ASK_CLAUDE_WITH_SYSTEM),
     }
 
 
@@ -933,7 +933,7 @@ def test_summary_treats_the_stretch_as_optional(monkeypatch: pytest.MonkeyPatch,
     pass_every_conversation_check()
     lab_checks.SESSION_PASSES.discard("stretch-conversation")
     namespace = finished_namespace() | {"bottles_to_drink_soon": stub_drink_soon}
-    del namespace["SOMMELIER_PROMPT"]
+    namespace["ask_claude"] = make_ask_claude(ASK_CLAUDE_WITHOUT_SYSTEM)
     capsys.readouterr()
     assert lab_checks.summary(namespace) is True
     output = capsys.readouterr().out
@@ -946,3 +946,88 @@ def test_summary_handles_undefined_functions(monkeypatch: pytest.MonkeyPatch, ca
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     assert lab_checks.summary({}) is False
     assert "is not defined" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# check_sommelier
+# ---------------------------------------------------------------------------
+
+ASK_CLAUDE_WITH_SYSTEM: str = '''
+def ask_claude(messages):
+    return client.messages.create(
+        model="claude-haiku-5-5", max_tokens=1024, system=SOMMELIER_PROMPT, tools=[], messages=messages
+    )
+'''
+
+ASK_CLAUDE_WITHOUT_SYSTEM: str = '''
+def ask_claude(messages):
+    return client.messages.create(model="claude-haiku-5-5", max_tokens=1024, tools=[], messages=messages)
+'''
+
+
+def make_ask_claude(source: str, prompt: Any = "You are a sommelier.", client: Any = None) -> Callable[[list], Any]:
+    """Define ask_claude the way a notebook cell does, with ``client`` as a global.
+
+    :param source: The function's source.
+    :param prompt: The value of SOMMELIER_PROMPT.
+    :param client: The client, or a fresh SDK client with a dummy key.
+    :returns: The defined ask_claude.
+    """
+    import anthropic
+
+    namespace: dict[str, Any] = {
+        "client": client if client is not None else anthropic.Anthropic(api_key="sk-ant-test-key"),
+        "SOMMELIER_PROMPT": prompt,
+    }
+    exec(source, namespace)
+    return namespace["ask_claude"]
+
+
+def test_check_sommelier_passes_with_a_system_prompt(capsys: pytest.CaptureFixture[str]) -> None:
+    """A non-empty system prompt passes, and no request is sent."""
+    assert lab_checks.check_sommelier(make_ask_claude(ASK_CLAUDE_WITH_SYSTEM)) is True
+    assert "PASS:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("source", "prompt"),
+    [(ASK_CLAUDE_WITHOUT_SYSTEM, "You are a sommelier."), (ASK_CLAUDE_WITH_SYSTEM, ""), (ASK_CLAUDE_WITH_SYSTEM, "   ")],
+    ids=["no-system", "empty-prompt", "blank-prompt"],
+)
+def test_check_sommelier_fails_with_a_your_turn_hint(
+    source: str, prompt: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing or empty system prompt is NOT YET, with a YOUR TURN hint."""
+    assert lab_checks.check_sommelier(make_ask_claude(source, prompt)) is False
+    assert "NOT YET: YOUR TURN:" in capsys.readouterr().out
+
+
+def test_check_sommelier_restores_the_client() -> None:
+    """The real create method is back in place afterward, even when the check fails."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key="sk-ant-test-key")
+    original = client.messages.create
+    lab_checks.check_sommelier(make_ask_claude(ASK_CLAUDE_WITHOUT_SYSTEM, client=client))
+    lab_checks.check_sommelier(make_ask_claude(ASK_CLAUDE_WITH_SYSTEM, client=client))
+    assert "create" not in vars(client.messages)
+    assert client.messages.create == original
+
+
+def test_check_sommelier_restores_an_instance_attribute() -> None:
+    """A create that lived on the instance is put back, not deleted."""
+    def create(**kwargs: Any) -> None:
+        """A stand-in create."""
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    lab_checks.check_sommelier(make_ask_claude(ASK_CLAUDE_WITH_SYSTEM, client=client))
+    assert client.messages.create is create
+
+
+def test_check_sommelier_needs_a_client(capsys: pytest.CaptureFixture[str]) -> None:
+    """Without a client global, the hint points back at Part 0."""
+    def ask_claude(messages: list) -> None:
+        """No client in sight."""
+
+    assert lab_checks.check_sommelier(ask_claude) is False
+    assert "client" in capsys.readouterr().out

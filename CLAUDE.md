@@ -115,7 +115,7 @@ Each part opens with a short Markdown cell: what you will do, why it matters, an
 
 ### End of the lab
 
-- The last code cell is `lab_checks.summary()`. It prints every part with PASS or NOT YET: it re-runs the offline checks (setup, the handler, the dispatch probe, the stretch handler) on the functions as they are now, and reports which conversation checks have passed since the kernel started. The stretch is listed but optional. A learner should not be able to finish feeling done when they are not.
+- The last code cell is `lab_checks.summary()`. It prints every part with PASS or NOT YET: it re-runs the offline checks (setup, the handler, the dispatch probe, the stretch handler, the sommelier prompt) on the functions as they are now, and reports which conversation checks have passed since the kernel started. The stretch is listed but optional. A learner should not be able to finish feeling done when they are not.
 - Checkpoint: `check_drink_soon(bottles_to_drink_soon)` grades the handler offline, like `check_handler`: 2026 with `within_years` 1 and 0, plus 2030 with `within_years` 0, which catches a handler that reads the system clock or keeps the quantity-0 Riesling.
 
 ## The planted bug (lab.ipynb only)
@@ -150,7 +150,7 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 
 ## lab_checks.py
 
-- Pure functions with type hints and Sphinx docstrings: `check_setup`, `check_part1`, `check_part2`, `check_part3`, `check_handler`, `check_drink_soon`, `check_dispatch` (the offline Merlot probe), plus a light check for the Part 4 re-run, the stretch gate `check_stretch_ready`, and `summary`.
+- Pure functions with type hints and Sphinx docstrings: `check_setup`, `check_part1`, `check_part2`, `check_part3`, `check_handler`, `check_drink_soon`, `check_dispatch` (the offline Merlot probe), `check_sommelier` (swaps out `client.messages.create` for one call, captures the arguments, restores it, and gives a YOUR TURN hint unless `system` is a non-empty string), plus a light check for the Part 4 re-run, the stretch gate `check_stretch_ready`, and `summary`.
 - The conversation checks record their passes in `SESSION_PASSES`, so `summary` can report them without calling the API.
 - When a graded function still raises `NotImplementedError`, the check prints one hint saying the TODO is unfinished, instead of failing every case.
 - Each prints `PASS: ...` or `NOT YET: ...` with a specific, actionable hint. No emoji. Return a `bool` as well so tests can use it.
@@ -173,7 +173,7 @@ The bug must be honest, not contrived: write the starter the way a reasonable de
 
 These come from a pilot run, where every TODO placeholder that returned a plausible value was left in place under the learner's new code and failed quietly.
 
-1. **TODO stubs fail loudly.** The body of every TODO function stub is only `raise NotImplementedError("YOUR TURN: write <function> (<part>). This is not one of the expected failures.")`, after its docstring and TODO comments. No plausible return values, and no starter code to copy from. The one exception is the stretch `ask_claude`: it stays complete, with a TODO comment on the exact line where `system=` goes. `tests/test_notebooks.py` asserts every lab stub has that body and raises when called.
+1. **TODO stubs fail loudly.** The body of every TODO function stub is only `raise NotImplementedError("YOUR TURN: write <function> (<part>). This is not one of the expected failures.")`, after its docstring and TODO comments. No plausible return values, and no starter code to copy from. The one exception is the stretch `ask_claude`: it stays complete, with a TODO comment on the exact line where `system=` goes, and `SOMMELIER_PROMPT: str = ""` under the prompt's TODO. `check_sommelier(ask_claude)` runs in that cell before the conversation, so a missing or empty prompt fails loudly. `tests/test_notebooks.py` asserts every lab stub has that body and raises when called.
 2. **A checkpoint shares a cell with the function it checks.** The check call is the last line of the cell that defines the function (`check_handler(check_cellar)`, `check_drink_soon(bottles_to_drink_soon)`, and `check_part3` or `check_part4` after the conversation that exercises `run_conversation` or `dispatch_tool`), so redefining the function always re-runs the check.
 3. **Shared constants and helpers live in given cells.** Anything a TODO needs but is not the lesson, such as `RESULT_FIELDS` or the `tool_error` helper, is defined at module level in a cell the learner does not edit, never inside a TODO stub.
 4. **Intentional failures and learner cells never look alike.** A Markdown banner goes before each one, in plain text with no emoji. Before every cell that fails on purpose (tagged `expected-failure`): "EXPECTED TO FAIL: read the error, then move on." Before every learner cell: "YOUR TURN: replace the raise line with your code." (or "YOUR TURN: complete the TODO in the next cell." when there is no raise line). The build script inserts the banners from the tags. A cell that fails on purpose must not swallow a `NotImplementedError`. This rule comes from a second pilot, where the author took Part 4's unfinished-TODO errors for more of the intended failures and skipped the TODOs.

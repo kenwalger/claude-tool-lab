@@ -1038,7 +1038,7 @@ def summary(namespace: dict[str, Any] | None = None) -> bool:
     """Print each part of the lab with PASS or NOT YET.
 
     Offline checks (setup, the handler, the dispatch probe, the stretch
-    handler) run again on the functions as they are now. Conversation checks
+    handler, the sommelier prompt) run again on the functions as they are now. Conversation checks
     need the API, so they are reported from this session: a restarted kernel
     forgets them until you run those cells again.
 
@@ -1101,14 +1101,16 @@ def summary(namespace: dict[str, Any] | None = None) -> bool:
         return None
 
     def sommelier() -> str | None:
-        """Check that the stretch system prompt was written.
+        """Re-run the offline sommelier check on the current ask_claude.
 
-        :returns: A hint if it is missing, otherwise ``None``.
+        :returns: A hint if it fails, otherwise ``None``.
         """
-        prompt = namespace.get("SOMMELIER_PROMPT")
-        if isinstance(prompt, str) and prompt.strip():
-            return None
-        return "SOMMELIER_PROMPT is not written yet."
+        ask_claude = function("ask_claude")
+        if ask_claude is None:
+            return "ask_claude is not defined. Run its cell."
+        if _sommelier_problem(ask_claude) is not None:
+            return "ask_claude does not send a sommelier system prompt yet. Run lab_checks.check_sommelier(ask_claude) for the details."
+        return None
 
     rows: list[tuple[str, bool, str | None]] = [
         ("Part 0: setup", True, None if _quietly(check_setup) else "run lab_checks.check_setup() for the details."),
@@ -1146,3 +1148,73 @@ def summary(namespace: dict[str, Any] | None = None) -> bool:
         return False
     print(f"PASS: every required part is done. Stretch: {stretch_done} of {len(stretch)} optional checks done.")
     return True
+
+
+# ---------------------------------------------------------------------------
+# Stretch: check the sommelier prompt offline
+# ---------------------------------------------------------------------------
+
+
+def _sommelier_problem(ask_claude: Callable[[list], Any]) -> str | None:
+    """Call ``ask_claude`` with the API swapped out, and check what it would send.
+
+    ``client.messages.create`` is replaced for one call by a stand-in that
+    records its arguments, then put back, so no request reaches the API.
+
+    :param ask_claude: The learner's ``ask_claude(messages)`` function.
+    :returns: A hint if no non-empty system prompt is sent, otherwise ``None``.
+    """
+    client = getattr(ask_claude, "__globals__", {}).get("client")
+    resource = getattr(client, "messages", None)
+    if resource is None or not hasattr(resource, "create"):
+        return "ask_claude does not use a client named client. Run the Part 0 cells, then this cell again."
+
+    captured: dict[str, Any] = {}
+
+    def record(*args: Any, **kwargs: Any) -> None:
+        """Stand in for client.messages.create and keep its arguments.
+
+        :param args: Positional arguments, which the SDK does not use.
+        :param kwargs: The request ask_claude would send.
+        """
+        captured.update(kwargs)
+
+    had_own_create = "create" in vars(resource)
+    original = vars(resource).get("create")
+    resource.create = record
+    try:
+        _, error = _run_handler(ask_claude, [{"role": "user", "content": "Which wine goes with risotto?"}])
+    finally:
+        if had_own_create:
+            resource.create = original
+        else:
+            del resource.create
+
+    if error is not None:
+        return f"ask_claude raised {type(error).__name__}: {error}. Fix that, then run this cell again."
+    if not captured:
+        return "ask_claude did not call client.messages.create. Keep the return client.messages.create(...) call."
+    system = captured.get("system")
+    if "system" not in captured:
+        return (
+            "YOUR TURN: ask_claude does not pass a system prompt yet. Replace the TODO comment "
+            "inside client.messages.create(...) with system=SOMMELIER_PROMPT, and run this cell again."
+        )
+    if not isinstance(system, str) or not system.strip():
+        return (
+            "YOUR TURN: the system prompt is empty. Write the sommelier prompt in "
+            "SOMMELIER_PROMPT, and run this cell again."
+        )
+    return None
+
+
+def check_sommelier(ask_claude: Callable[[list], Any]) -> bool:
+    """Check, offline, that ``ask_claude`` sends a non-empty system prompt.
+
+    :param ask_claude: Your ``ask_claude(messages)`` function.
+    :returns: ``True`` if the request would carry a non-empty ``system`` string.
+    """
+    problem = _sommelier_problem(ask_claude)
+    if problem is not None:
+        return _not_yet(problem)
+    return _passed("ask_claude sends your sommelier prompt as system=, on every call.")

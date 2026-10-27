@@ -49,6 +49,8 @@ The target learner knows basic Python and has never used the Claude API.
 
 **Stretch: the deadline.** Using `<` instead of `<=` drops bottles due in the deadline year. Leaving out past-due bottles drops the most urgent one. Reading the year from the clock passes the two 2026 cases, which is why `check_drink_soon` also tests 2030. The hints name each of these.
 
+**Stretch: forgetting `system=`.** The sommelier prompt is written but never passed to the API. `check_sommelier(ask_claude)` catches this offline, before the conversation runs. Hint: replace the TODO comment inside `client.messages.create(...)` with `system=SOMMELIER_PROMPT`.
+
 ### Found in pilots
 
 **Pilot 1: placeholders left in place.** In every TODO with a placeholder body, the author wrote the logic above the placeholder and left it in place. The placeholders returned plausible values (an empty list, a "not implemented" result), so they failed quietly. The fix: every TODO stub body is only `raise NotImplementedError(...)`, and each checkpoint shares a cell with the function it checks, so redefining the function always re-runs the check.

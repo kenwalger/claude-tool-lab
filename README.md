@@ -79,7 +79,7 @@ Start Jupyter with `uv run` from the project folder, so the notebook runs on the
 
 Each part ends with a checkpoint that prints either `PASS: ...` or `NOT YET: ...` with a specific hint. Fix what the hint names, run the cell again, and move on when it says `PASS`.
 
-- **Some checkpoints run offline.** `check_handler` and `check_drink_soon` call your function directly with fixed inputs and grade each case. They make no API calls, so they give the same answer every time.
+- **Some checkpoints run offline.** `check_handler` and `check_drink_soon` call your function directly with fixed inputs and grade each case. `check_sommelier` checks what `ask_claude` would send, without sending it. They make no API calls, so they give the same answer every time.
 - **Some checkpoints check a conversation.** Claude words its answers differently every time, so these checks never look for exact text. They check what must be true: the tool was called, every `tool_use` has a matching `tool_result`, the conversation ended with Claude's answer, and that answer names a vineyard your tool actually returned.
 - **A checkpoint shares a cell with the function it checks.** Running the cell again always checks your latest code.
 - **Two labels tell failures apart:**
