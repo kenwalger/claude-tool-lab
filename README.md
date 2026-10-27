@@ -146,5 +146,6 @@ The stretch gate found that `check_cellar` or `dispatch_tool` is not finished. T
 - Prompt caching, which makes repeated tool definitions and long prompts cheaper: <https://platform.claude.com/docs/en/build-with-claude/prompt-caching>
 - API errors and how to handle them: <https://platform.claude.com/docs/en/api/errors>
 - The Python SDK, including a tool runner that drives the loop you wrote by hand: <https://github.com/anthropics/anthropic-sdk-python>
+- What this lab simplifies, and what the production version of the loop and the error handling looks like: [docs/instructor-notes.md](docs/instructor-notes.md#what-this-lab-simplifies)
 
 To run the lab's own tests (no API calls): `uv run pytest`.

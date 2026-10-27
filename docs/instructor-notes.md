@@ -87,6 +87,33 @@ The handler checks are offline and exact, because the handler is ordinary determ
 - **The vineyard check cannot catch an invented bottle mentioned alongside a real one.** If Claude names the real Crooked Lantern Vineyard and also invents a second bottle, the check passes. It proves the answer used the tool's data, not that it used only that data.
 - **`summary()` remembers conversation checks only for the current kernel.** After a restart, those rows say `NOT YET` until the learner runs those cells again. The offline rows are re-run every time.
 
+## What this lab simplifies
+
+Two deliberate teaching choices keep the code short enough to write in 45 minutes. Each one is a good place to show learners what the production version looks like.
+
+### Ending the conversation loop
+
+**In the lab:** `run_conversation` returns normally when it hits `max_turns`, printing a note, and it treats any `stop_reason` other than `tool_use` as finished, including `max_tokens` and `refusal`. That keeps the loop to one condition while learners get the message shapes right.
+
+**In production:** name the limit for what it counts (`max_api_calls`). Treat only `end_turn` and `stop_sequence` as complete. Otherwise, raise a `ConversationIncomplete` error that carries the history so far, ending in the latest `tool_result`s, so the caller can resume the conversation instead of losing it. An alternative to raising is one final call with tools turned off, which forces a text answer. To test the loop, use a fake `ask_claude`:
+
+- one that always returns `tool_use` makes the loop raise after exactly N calls, with a valid history;
+- `max_tokens` and `refusal` responses both raise;
+- `tool_use` and then `end_turn` returns after exactly 2 calls.
+
+### Handling tool errors
+
+**In the lab:** `dispatch_tool` catches only `ValueError`, so a real bug in the learner's own code still crashes loudly where they can see it.
+
+**In production:**
+
+- Validate the input against the tool's schema before calling the handler.
+- Put a catch-all boundary around each tool that logs the full error for you but returns only a generic `is_error` result to the model.
+- Give tools with side effects timeouts and retries, and make them idempotent, so a retry does no harm.
+- Check authorization in code, never by trusting the model's request.
+- Limit the size of tool results.
+- Treat tool output as untrusted. Text from a web page, a file, or a database can carry instructions meant to hijack the model (prompt injection).
+
 ## Discussion prompts
 
 - Should a bottle with quantity 0 count as "in the cellar"?
