@@ -11,6 +11,21 @@ By the end, you will be able to:
 3. Write the loop that runs a tool and returns the result to Claude.
 4. Debug a tool handler that fails on realistic model input, so it returns a clear error instead of crashing.
 
+## Part of a learning path
+
+This is Lab 1 of a three-lab path. The cellar stays the same throughout; each lab takes on a harder engineering problem.
+
+```mermaid
+flowchart LR
+    L1["Lab 1: Make it work<br/>(this lab)"] --> L2["Lab 2: Make it reliable"] --> L3["Lab 3: Make it operational"]
+    classDef built fill:#d6e6e1,stroke:#2c4a43,stroke-width:2px,color:#1f2a27
+    classDef designed fill:#fbf6ee,stroke:#8e4e37,stroke-width:2px,stroke-dasharray:6 4,color:#3a2a22
+    class L1 built
+    class L2,L3 designed
+```
+
+Labs 2 and 3 are designed but not yet built. [The learning path](docs/learning-path.md) describes what each lab covers, how learners prove what they learned, and how Lab 1 was piloted and revised.
+
 ## Prerequisites
 
 - **Python 3.12 or newer.** If you do not have it, `uv sync` downloads it for you.
@@ -147,5 +162,6 @@ The stretch gate found that `check_cellar` or `dispatch_tool` is not finished. T
 - API errors and how to handle them: <https://platform.claude.com/docs/en/api/errors>
 - The Python SDK, including a tool runner that drives the loop you wrote by hand: <https://github.com/anthropics/anthropic-sdk-python>
 - What this lab simplifies, and what the production version of the loop and the error handling looks like: [docs/instructor-notes.md](docs/instructor-notes.md#what-this-lab-simplifies)
+- What comes after this lab: [docs/learning-path.md](docs/learning-path.md)
 
 To run the lab's own tests (no API calls): `uv run pytest`.
