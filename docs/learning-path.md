@@ -85,6 +85,26 @@ Lab 1 deliberately simplifies some things so the core protocol stays in focus. T
 
 **Proof:** the adversarial suite passes, and the learner walks through the trace of one conversation and explains each step.
 
+## Learning design: Bloom's taxonomy
+
+Each lab climbs Bloom's taxonomy, and the path as a whole climbs it too. Within Lab 1:
+
+| Bloom's level | Where it happens in Lab 1 | How it is assessed |
+|---|---|---|
+| Remember and understand | Part 1: read the structured response, content blocks, and stop reasons. Part 2: read the `tool_use` block Claude sends back. | `check_part1`, `check_part2` |
+| Apply | Part 2: define a tool with a JSON schema. Part 3: write the tool-use loop. | `check_part3` checks the conversation's invariants |
+| Analyze | Part 4: read the traceback, reproduce the failures offline, and separate three different bugs. | `check_handler` grades five cases, each with its own hint |
+| Evaluate | Part 4's design decisions: an empty result or an error? Exact match or substring? Plus the discussion prompts at the end. | Discussion, with an instructor or a group |
+| Create | The stretch: design a second tool and a system prompt, and get Claude to choose between two tools. | `check_drink_soon`, `check_sommelier`, `check_part3` |
+
+Across the path, the center of gravity moves up a level per lab:
+
+- **Lab 1** is mostly *apply* and *analyze*: make the protocol work and diagnose why it breaks.
+- **Lab 2** is mostly *analyze* and *evaluate*: decide what "finished" and "failed" mean, and defend those decisions with tests.
+- **Lab 3** is mostly *evaluate* and *create*: design authorization and confirmation rules, and write the adversarial cases that test them.
+
+Automated checks are strongest at the *apply* and *analyze* levels. *Evaluate* is hard to grade by script, so each lab saves those questions for discussion rather than pretending a checker can judge them.
+
 ## Same lab, different settings
 
 The lab's checkpoints can support different kinds of training. How far the result can be trusted changes the design, not just the output.
